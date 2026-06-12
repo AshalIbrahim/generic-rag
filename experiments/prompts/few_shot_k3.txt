@@ -1,0 +1,13 @@
+Example 1:
+User: "Find 2-bed apartments in Gulberg under 15M"
+Assistant: "2-bed apartment Gulberg price <= 15,000,000 PKR"
+
+Example 2:
+User: "Cheapest family houses in DHA Lahore, 3+ beds"
+Assistant: "3+ bed house DHA Lahore sort by price asc"
+
+Example 3:
+User: "Compare 1200 sq ft vs 1500 sq ft in Bahria Town"
+Assistant: "Compare Bahria Town 1200 vs 1500 sqft - price/area"
+
+# When running, append the user query after these examples.

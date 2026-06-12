@@ -1,0 +1,265 @@
+id,location,water_sentiment,electricity_sentiment,gas_sentiment,traffic_sentiment,safety_sentiment,gemini_raw_response,updated_at
+1,"Korangi, Karachi, Sindh",Poor,Poor,Poor,Poor,Poor,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Poor
+explain: Korangi, like much of Karachi, suffers from chronic water shortages, low pressure, and quality issues. Electricity supply is plagued by frequent load shedding and infrastructure strain. Gas availability is often unreliable, particularly in winter, with low pressure and complete cut-offs. Traffic congestion is severe due to high population density, inadequate road infrastructure, and heavy commercial activity. Safety is compromised by persistent street crime, including snatching and robberies, affecting daily life.","2026-03-24 21:15:19"
+2,"Gulshan-e-Iqbal Town, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Gulshan-e-Iqbal Town, Karachi, experiences chronic water shortages and unreliable supply. Electricity is subject to frequent load shedding and outages. Gas supply is often erratic, especially with low pressure or unavailability during winter. Traffic is severely congested on major roads due to high population density. Safety has improved significantly in Karachi, but street crime remains a persistent concern in the area.","2026-03-24 21:15:24"
+3,"Gadap Town, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Gadap Town faces chronic water scarcity, with an inadequate and unreliable supply often reliant on tankers. Electricity is prone to frequent load shedding, voltage fluctuations, and unscheduled outages due to K-Electric's infrastructure and demand issues. Gas supply is a major concern, especially in winter, with severe low pressure and complete cuts impacting domestic use. Traffic congestion is high on major arteries and local roads, compounded by poor infrastructure and a growing population. Safety has improved significantly regarding organized crime, but street crime (snatching, muggings) remains a persistent problem, requiring caution from residents.","2026-03-24 21:15:32"
+4,"Malir, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Malir experiences chronic water shortages requiring tanker reliance, frequent electricity load shedding, and unreliable gas supply with pressure issues. Traffic congestion is severe due to heavy commercial and residential movement. Safety has improved significantly but street crime and occasional incidents persist.","2026-03-24 21:15:38"
+5,"Naya Nazimabad, Karachi, Sindh",Fair,Fair,Fair,Good,Good,"water: Fair
+electricity: Fair
+gas: Fair
+traffic: Good
+safety: Good
+explain: Naya Nazimabad is a planned, relatively upscale community with dedicated infrastructure. Water and electricity supply are generally more reliable than many other parts of Karachi due to better management and feeder lines, but still experience occasional issues or load shedding common to the city. Gas supply, while possibly better than average, is still subject to national shortages, particularly in winter. Traffic within the community is well-managed, and its location helps avoid the most severe city congestion. Safety is a primary focus for this gated community, benefiting from controlled access and private security, making it significantly safer than general Karachi.","2026-03-24 21:15:44"
+6,"Clifton, Karachi, Sindh",Fair,Fair,Poor,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Clifton experiences moderate water supply issues and occasional electricity outages. Gas supply is often unreliable, especially during winter months. Traffic congestion is severe and constant, particularly during peak hours. Safety has improved but street crime remains a concern.","2026-03-24 21:15:51"
+7,"DHA Defence, Karachi, Sindh",Fair,Good,Fair,Poor,Good,"water: Fair
+electricity: Good
+gas: Fair
+traffic: Poor
+safety: Good
+explain: Water supply in DHA is better managed than most of Karachi, but residents still often supplement municipal supply with private tankers due to inconsistencies, and quality can vary. Electricity is reliably "Good" as K-Electric prioritizes DHA, resulting in minimal load shedding compared to other parts of the city. Gas supply is generally better than many Karachi localities, but it's still susceptible to national shortages and low pressure during peak winter months, making it "Fair." Traffic in DHA is "Poor" due to it being a major commercial and residential hub, leading to significant congestion, especially during peak hours and around market areas. Safety is "Good" as DHA benefits from dedicated security patrols and a generally lower crime rate compared to most other areas of Karachi.","2026-03-24 21:17:00"
+8,"Gulistan-e-Jauhar, Karachi, Sindh",Poor,Fair,Fair,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Fair
+traffic: Poor
+safety: Fair
+explain: Gulistan-e-Jauhar, like much of Karachi, faces chronic water shortages and irregular supply. Electricity experiences frequent load shedding, particularly in peak seasons. Gas supply can have pressure issues, especially in winter. Traffic is severely congested due to high population density and busy commercial activity. While overall security has improved in Karachi, street crime remains a significant concern in the area.","2026-03-24 21:17:04"
+9,"Shahra-e-Faisal, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Shahra-e-Faisal, like much of Karachi, faces severe utility challenges. Water supply is typically intermittent and insufficient. Electricity experiences frequent and prolonged load shedding. Gas supply is often unreliable, with low pressure or cut-offs common. Traffic on this major artery is notoriously heavy and congested throughout most of the day. While overall security has improved over recent years, street crime remains a significant concern, especially on major roads.","2026-03-24 21:17:09"
+10,"Shaheed Millat Road, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Karachi generally faces severe shortages and unreliable supply for water, electricity, and gas due to aging infrastructure, high demand, and load shedding, affecting Shaheed Millat Road. Traffic is consistently heavy and congested on this major thoroughfare. Safety has improved city-wide but street crime, such as snatching and muggings, remains a significant concern in busy areas.","2026-03-24 21:17:15"
+11,"Tariq Road, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Water supply in Karachi, including Tariq Road, is generally intermittent and insufficient, leading to frequent shortages and reliance on tankers. Electricity supply, managed by K-Electric, often experiences load shedding (power outages), though commercial areas might have slightly better priority than purely residential ones. Gas supply is often unreliable, particularly in winter, with reports of low pressure or complete unavailability. Tariq Road is a major commercial and shopping hub, resulting in severe traffic congestion, especially during peak hours, evenings, and weekends, exacerbated by parking issues. Safety has improved city-wide, but street crime (e.g., snatching, robbery) remains a concern in bustling commercial areas like Tariq Road, requiring vigilance.","2026-03-24 21:17:21"
+12,"Khayaban-e-Ittehad Road, Karachi, Sindh",Fair,Fair,Poor,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Khayaban-e-Ittehad Road in Karachi faces intermittent water supply and frequent electricity outages, though less severe than other areas. Gas supply is consistently poor, especially in colder months. Traffic congestion is severe, particularly during peak hours, due to it being a major thoroughfare. While overall security has improved in Karachi, street crime remains a persistent safety concern.","2026-03-24 21:17:28"
+13,"Scheme 33, Karachi, Sindh",Poor,Poor,Poor,Fair,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Fair
+safety: Fair
+explain: Scheme 33 experiences chronic shortages and inconsistent supply of water, electricity, and gas. Traffic is often congested due to rapid development and high population density, and street crime remains a persistent safety concern despite overall improvements in city security.","2026-03-24 21:17:33"
+14,"Saddar Town, Karachi, Sindh",Poor,Poor,Poor,Poor,Poor,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Poor
+explain: Saddar Town, like much of Karachi, faces severe challenges with basic utilities due to aging infrastructure, high demand, and systemic issues. Water supply is often intermittent and low pressure. Electricity is plagued by frequent load shedding. Gas supply is often low pressure or unavailable, especially in colder months. Traffic is notoriously heavy and chaotic due to dense commercial activity and population. Safety is a significant concern due to prevalent street crime and snatching in busy areas.","2026-03-24 21:17:38"
+15,"I. I. Chundrigar Road, Karachi, Sindh",Fair,Fair,Fair,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Fair
+traffic: Poor
+safety: Fair
+explain: I. I. Chundrigar Road is a central business district in Karachi. Water, electricity, and gas supplies are generally fair, but common urban infrastructure issues can lead to intermittent disruptions. Traffic is consistently poor due to heavy congestion during peak hours. Safety has significantly improved in recent years, making it generally fair, though standard urban vigilance is recommended.","2026-03-24 21:17:43"
+16,"North Karachi, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: North Karachi, like much of the city, faces chronic water shortages, leading to reliance on tankers. Electricity supply is unreliable due to frequent load shedding by K-Electric. Gas pressure is often very low, with unannounced cuts, particularly in winter. Traffic is severely congested during peak hours on major arteries. While overall law and order have improved significantly from past decades, street crime (snatching, robberies) remains a substantial daily concern for residents, making safety 'Fair' rather than 'Good'.","2026-03-24 21:17:50"
+17,"Bahria Town Karachi, Karachi, Sindh",Fair,Good,Fair,Good,Good,"water: Fair
+electricity: Good
+gas: Fair
+traffic: Good
+safety: Good
+explain: Bahria Town Karachi benefits from private infrastructure, leading to generally good electricity and internal traffic flow, and excellent safety due to a gated community and dedicated security. Water supply is also better than many parts of Karachi due to its own system but can still face occasional pressure issues. Gas supply, while often managed better, is still impacted by national shortages, leading to frequent low pressure or unavailability, especially in winter.","2026-03-24 21:19:03"
+18,"North Nazimabad, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: North Nazimabad experiences severe and inconsistent water and gas supplies, often requiring external sources or enduring low pressure/outages, particularly during peak demand or winter for gas. Electricity supply by K-Electric is fair, with scheduled and unscheduled load shedding still occurring. Traffic is consistently heavy and congested due to high population density and inadequate road infrastructure. While overall safety in Karachi has improved, street crime, including snatching, remains a significant concern in the area, placing it in the fair category.","2026-03-24 21:20:10"
+19,"Gulberg Town, Karachi, Sindh",Fair,Fair,Poor,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Water supply in Gulberg Town can be intermittent with varying pressure. Electricity is subject to scheduled and unscheduled load shedding by K-Electric. Gas supply faces significant pressure issues and shortages, especially during winter months. Traffic congestion is severe, particularly during peak hours, reflecting Karachi's overall traffic situation. Safety has improved overall, but street crime like snatching remains a concern.","2026-03-24 21:20:16"
+20,"Defence View Society, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Karachi generally experiences chronic water shortages, intermittent supply, and reliance on tankers. Electricity supply is often subject to load shedding and frequent outages, though Defence View may fare slightly better than some areas. Gas supply is severely problematic, with low pressure and unavailability being common, particularly in colder months. Traffic congestion is a major issue across Karachi, especially during peak hours. Safety has significantly improved in recent years, but street crime remains a persistent concern.","2026-03-24 21:54:53"
+21,"Cantt, Karachi, Sindh",Fair,Good,Fair,Poor,Good,"water: Fair
+electricity: Good
+gas: Fair
+traffic: Poor
+safety: Good
+explain: Cantt areas in Karachi generally receive better infrastructure and utilities due to their planned nature and higher socio-economic profile, leading to more reliable electricity and better safety. However, they are still affected by Karachi's overall water scarcity and city-wide gas supply issues, especially during peak seasons. Traffic remains a significant problem as Cantt is integrated into Karachi's heavily congested road network.","2026-03-25 01:59:25"
+22,"Saadi Road, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Saadi Road in Karachi experiences poor water and gas supply due to city-wide shortages and infrastructure issues, particularly during peak demand or winter. Electricity supply is fair, though load shedding can occur. Traffic is consistently poor due to high congestion in this busy urban area. Safety is fair, as street crime remains a concern despite overall improvements.","2026-03-25 01:59:31"
+23,"Gizri, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Water supply in Gizri is often insufficient and erratic, with residents frequently relying on private tankers. Electricity experiences scheduled and unscheduled outages, though generally less severe than some areas. Gas supply faces severe low pressure and cut-offs, particularly in colder months. Traffic is heavily congested, especially during peak hours. Safety has improved but street crime remains a notable concern.","2026-03-25 02:10:02"
+24,"Federal B Area, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Federal B Area experiences chronic water and gas shortages, frequent electricity load shedding, severe traffic congestion, and ongoing concerns about street crime and petty theft.","2026-03-25 16:28:47"
+25,"Baloch Colony, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Baloch Colony experiences chronic water shortages and irregular supply. Electricity supply is fair, but frequent load shedding is common. Gas supply is poor, with significant low pressure and outages, particularly severe in winter. Traffic is poor due to high congestion and often poor road conditions. Safety is fair; while major crime has decreased, street crime (snatching, robbery) remains a persistent concern.","2026-03-25 16:28:54"
+26,"DHA City Karachi, Karachi, Sindh",Good,Good,Fair,Good,Good,"water: Good
+electricity: Good
+gas: Fair
+traffic: Good
+safety: Good
+explain: DHA City Karachi is a planned, upscale development that prioritizes and invests in its own infrastructure or receives preferential treatment for utilities compared to wider Karachi. Water and electricity supply are generally reliable. Gas supply is subject to national shortages, especially in winter, making it less consistent than other utilities. Traffic within and around DHA City is significantly lighter due to its location on the city's outskirts and planned road networks. Safety is a high priority with dedicated security and controlled access, making it one of the safest areas.","2026-03-25 16:29:05"
+27,"Jamshed Road, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Jamshed Road, Karachi, suffers from chronic water shortages and inconsistent supply. Electricity and gas services are unreliable, with frequent load shedding and low pressure, especially during peak demand periods. Traffic is severely congested and chaotic, particularly during rush hours, due to its central location and heavy volume. Safety is generally fair; while not a high-crime area, typical urban precautions against petty crime like snatching are advisable due to its busy nature.","2026-03-25 16:29:11"
+28,"New Karachi, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: New Karachi, like much of Karachi, faces significant issues with public utilities. Water supply is often inconsistent and insufficient, requiring reliance on tankers. Electricity experiences frequent load shedding and outages. Gas supply is prone to low pressure and complete unavailability, particularly in winter. Traffic congestion is severe and constant due to high population density and limited infrastructure. While overall security has improved in recent years, street crime and petty theft remain a persistent concern.","2026-03-25 16:29:16"
+29,"Rashid Minhas Road, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Karachi generally faces challenges with water supply (often intermittent or requiring tankers) and frequent gas shortages, especially during peak seasons. Electricity supply has improved but still experiences load shedding. Rashid Minhas Road is a major arterial road, leading to significant traffic congestion, particularly during peak hours. Safety has improved significantly in Karachi, but petty crime like snatching remains a concern, necessitating vigilance.","2026-03-25 16:29:20"
+30,"M. A. Jinnah Road, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: M. A. Jinnah Road, located in the densely populated commercial heart of Karachi, experiences significant urban challenges. Water supply is generally poor across Karachi, characterized by intermittent availability and quality concerns due to aging infrastructure. Electricity faces frequent load shedding and outages, a pervasive issue throughout the city. Gas supply is often unreliable, with low pressure or cuts common, especially during peak seasons. Traffic congestion is severe and constant on this major arterial road, particularly during peak hours, making travel extremely slow. While overall safety in Karachi has improved, M. A. Jinnah Road, as a bustling commercial and public thoroughfare, still presents a fair level of safety concern due to petty crime and the general security landscape of a major metropolis.","2026-03-25 16:29:26"
+31,"University Road, Karachi, Sindh",Poor,Poor,Poor,Poor,Poor,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Poor
+explain: University Road, Karachi, faces chronic issues with frequent power outages (load shedding), intermittent water supply and quality, and gas shortages, especially during peak demand. Traffic is consistently heavy and congested due to high vehicle density and ongoing infrastructure work. Safety is a concern due to prevalent street crime.","2026-03-25 16:30:33"
+32,"Sindh Industrial Trading Estate (SITE), Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Sindh Industrial Trading Estate (SITE), Karachi, experiences chronic water scarcity, irregular supply, and low pressure. Electricity supply is often unreliable with frequent load shedding and outages, necessitating reliance on backup generators. Gas supply is critically poor, suffering from severe pressure issues and curtailments, especially in colder months, significantly impacting industrial operations. Traffic is consistently heavy and congested due to high industrial and commercial vehicle movement on inadequate road infrastructure. Safety has improved significantly over recent years due to enhanced law enforcement efforts, but street crime and occasional security concerns persist.","2026-03-25 16:30:42"
+33,"Shahra-e-Qaideen, Karachi, Sindh",Fair,Fair,Fair,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Fair
+traffic: Poor
+safety: Fair
+explain: Karachi generally faces challenges with intermittent water supply and quality, and frequent load shedding for electricity. Gas supply can be inconsistent, especially during peak demand seasons. Traffic congestion is severe and common on major arteries like Shahra-e-Qaideen. Safety has improved significantly over recent years but petty crime remains a concern.","2026-03-25 16:30:47"
+34,"Nazimabad, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Nazimabad, like much of Karachi, faces chronic issues with utility supplies, including scarce and intermittent water, frequent electricity load shedding, and often low-pressure or unavailable gas. Traffic is severely congested, and while major security threats have reduced, street crime remains a significant concern.","2026-03-25 16:30:52"
+35,"Old Queens Road, Karachi, Sindh",Fair,Fair,Fair,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Fair
+traffic: Poor
+safety: Fair
+explain: Karachi, including Old Queens Road, frequently experiences inconsistent water pressure and supply issues, and electricity blackouts are common. Gas supply can be intermittent, especially during peak demand or winter. Traffic on Old Queens Road is typically heavily congested and chaotic due to its urban location. Safety is fair, with street crime remaining a concern despite overall security improvements.","2026-03-25 16:30:58"
+36,"Khalid Bin Walid Road, Karachi, Sindh",Fair,Fair,Poor,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Khalid Bin Walid Road, a busy commercial and residential artery in Karachi, experiences city-wide infrastructure challenges. Water and electricity supply are inconsistent due to general scarcity and load shedding. Gas supply is frequently poor, particularly in winter. Traffic is consistently heavy and congested due to the road's prominence and high vehicle density. While overall safety has improved significantly in Karachi, street crime remains a common concern, contributing to a fair rating.","2026-03-25 16:31:05"
+37,"Old Jamia Millia Road, Karachi, Sindh",Poor,Poor,Poor,Poor,Poor,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Poor
+explain: Services in Karachi, including water, electricity, and gas, suffer from chronic shortages, irregular supply, and infrastructure issues, leading to frequent outages and low pressure. Traffic is consistently heavy and congested due to the city's large population and inadequate road infrastructure. Safety remains a concern with persistent street crime and snatching incidents, despite overall improvements in security.","2026-03-25 16:31:09"
+38,"Frere Town, Karachi, Sindh",Fair,Fair,Poor,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Frere Town, like much of Karachi, experiences chronic water shortages and intermittent supply. Electricity is subject to frequent load shedding, especially during peak demand. Gas supply is consistently poor, particularly in winter, with low pressure and cuts. Traffic is severely congested due to Karachi's dense population and infrastructure issues. Safety has improved significantly over the past decade, but street crime remains a concern.","2026-03-25 16:31:15"
+39,"Jamshed Town, Karachi, Sindh",Fair,Fair,Fair,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Fair
+traffic: Poor
+safety: Fair
+explain: Jamshed Town, like much of Karachi, experiences intermittent water supply and relies on tankers. Electricity is generally available but subject to scheduled and unscheduled load shedding. Gas supply can be inconsistent, with low pressure or shortages, especially during peak demand. Traffic congestion is severe and chronic due to high population density and inadequate infrastructure. While major crime has decreased, street crime (snatching, petty theft) remains a significant concern, making safety fair rather than good.","2026-03-25 16:31:21"
+40,"KDA Scheme 1, Karachi, Sindh",Poor,Fair,Poor,Poor,Fair,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: Water supply is often insufficient, requiring tanker reliance. Electricity experiences occasional load shedding and voltage fluctuations. Gas pressure is frequently low, especially in winter. Traffic congestion is significant across Karachi. Safety has improved, but street crime remains a concern.","2026-03-25 16:32:27"
+41,"Karachi Motorway, Karachi, Sindh",Poor,Poor,Poor,Poor,Fair,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Fair
+explain: The Karachi Motorway is significantly impacted by the general infrastructure issues of Karachi. Water, electricity, and gas supplies are consistently poor with frequent shortages and load shedding affecting both surrounding areas and services. Traffic is notoriously heavy and congested due to the city's large population and driving habits. Safety is fair, influenced by general urban concerns and aggressive driving, although motorways themselves are somewhat more controlled environments.","2026-03-25 16:32:34"
+42,"Civil Lines, Karachi, Sindh",Poor,Fair,Poor,Poor,Poor,"water: Poor
+electricity: Fair
+gas: Poor
+traffic: Poor
+safety: Poor
+explain: Civil Lines, like much of Karachi, experiences severe water shortages with unreliable supply and quality. Electricity supply is subject to frequent load shedding, though potentially less severe than other areas. Gas supply is often unreliable, especially in winter, with low pressure or complete unavailability. Traffic is heavily congested due to high vehicle volume and insufficient infrastructure. Street crime, including muggings and snatchings, remains a significant and pervasive concern.","2026-03-25 16:32:43"
+43,"Kashmir Colony, Karachi, Sindh",Poor,Poor,Poor,Poor,Poor,"water: Poor
+electricity: Poor
+gas: Poor
+traffic: Poor
+safety: Poor
+explain: Kashmir Colony, Karachi, a densely populated area in Korangi, experiences severe infrastructure issues. Water supply is highly intermittent, low pressure, and often requires tankers. Electricity is unreliable with frequent load shedding and outages. Gas supply is consistently low pressure or unavailable, particularly during colder months. Traffic is heavily congested on main arteries and within the colony's narrow streets. Safety is a significant concern due to high rates of street crime and snatching incidents.","2026-03-25 16:32:49"
+44,"Jinnah Avenue, Karachi, Sindh",Fair,Fair,Fair,Poor,Fair,"water: Fair
+electricity: Fair
+gas: Fair
+traffic: Poor
+safety: Fair
+explain: Karachi generally experiences water scarcity, intermittent gas supply, and frequent electricity load shedding. Jinnah Avenue, a major thoroughfare, suffers from severe traffic congestion, and like the rest of the city, faces ongoing issues with street crime.","2026-03-25 16:32:55"

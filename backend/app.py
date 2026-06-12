@@ -1,0 +1,1130 @@
+import sys
+import os
+from sentence_transformers import SentenceTransformer
+import chromadb
+from typing import List
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import mysql.connector
+import pandas as pd
+import json
+import boto3
+from dotenv import load_dotenv
+from pydantic import BaseModel
+import zipfile
+import numpy as np
+import re
+from datetime import datetime
+from huggingface_hub import InferenceClient
+from pathlib import Path
+
+
+load_dotenv()
+from google import genai
+from groq import Groq
+googlemodel = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+collections = None
+chroma_client = None
+indexloaded = False
+print("API key:", os.getenv("GROQ_API_KEY"))
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+def groq_generate(prompt: str) -> str:
+    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    for model in models:
+        try:
+            response = groq_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1024,
+                temperature=0.4,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"⚠️ {model} failed: {e}, trying next...")
+    raise Exception("All Groq models failed.")
+# ---- Load environment variables ----
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "eu-north-1")
+S3_BUCKET = os.getenv("S3_BUCKET", "zameen-project")
+S3_MODELS_PREFIX = os.getenv("S3_MODELS_PREFIX", "zameen_models")
+S3_KEY = "chroma_joined_index.zip"
+APP_DIR = Path(__file__).resolve().parent
+LOCAL_ZIP = str(APP_DIR / "chroma_joined_index_cloud.zip")
+LOCAL_INDEX_PATH = str(APP_DIR / "chroma_joined_index")
+# ---- Setup ----
+app = FastAPI(title="Zameen MLOps API")
+
+# Allow CORS
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://robin-overtake-discover.ngrok-free.dev",
+        "http://localhost:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---- HF Chat Config ----
+# Supports both HF_API_TOKEN/HF_CHAT_MODEL and HF_TOKEN/HF_MODEL env names.
+HF_API_TOKEN = os.getenv("HF_API_TOKEN") or os.getenv("HF_TOKEN", "")
+HF_CHAT_MODEL = os.getenv("HF_CHAT_MODEL") or os.getenv("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
+HF_TIMEOUT_SECONDS = int(os.getenv("HF_TIMEOUT_SECONDS", "45"))
+HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "420"))
+
+
+
+# Initialize S3 client (will use env creds)
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    region_name=AWS_DEFAULT_REGION,
+)
+
+
+
+def downloadindex():
+    global chroma_client, collections
+    legacy_cloud_path = APP_DIR / "chroma_joined_index_cloud"
+    standard_path = APP_DIR / "chroma_joined_index"
+    chosen_path = standard_path if standard_path.exists() else legacy_cloud_path
+    if chosen_path.exists():
+        print("Local Chroma index already exists. Skipping download.")
+        chroma_client = chromadb.PersistentClient(path=str(chosen_path))
+        collections = chroma_client.get_collection("zameen_joined_index")
+        return
+    print("Downloading Chroma index from S3...")
+    s3 = boto3.client("s3")
+    s3.download_file(S3_BUCKET, S3_KEY, LOCAL_ZIP)
+    print("Extracting zip...")
+    with zipfile.ZipFile(LOCAL_ZIP, "r") as z:
+        for member in z.infolist():
+            member_name = member.filename.replace("/", os.sep).replace("\\", os.sep)
+            if (
+                not member_name
+                or member_name.startswith(("..", "/", "\\"))
+                or any(ch in member_name for ch in ['<', '>', ':', '"', '|', '?', '*'])
+            ):
+                continue
+            target = APP_DIR / member_name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            with z.open(member, "r") as src, open(target, "wb") as dst:
+                dst.write(src.read())
+    chosen_path = standard_path if standard_path.exists() else legacy_cloud_path
+    print("Index ready.")
+    chroma_client = chromadb.PersistentClient(path=str(chosen_path))
+    collections = chroma_client.get_collection("zameen_joined_index")
+
+downloadindex()
+embmodel = SentenceTransformer("all-MiniLM-L6-v2")
+
+# ---- DB Connection ----
+def get_connection():
+    return mysql.connector.connect(
+        host=os.getenv("HOST"),
+        port=int(os.getenv("PORT", 3306)),
+        user=os.getenv("USER"),
+        password=os.getenv("PASSWORD"),
+        database=os.getenv("DB_NAME"),
+    )
+
+
+# ---- Load model ----
+# ---- Load model (without MLflow) ----
+def load_model(model_name="ZameenPriceModelSale"):
+    model = None
+    sale_feature_columns = None
+    valid_metadata = None
+    try:
+        os.makedirs("model_cache", exist_ok=True)
+
+        # Download entire model folder
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(
+            Bucket=S3_BUCKET, Prefix=f"{S3_MODELS_PREFIX}/{model_name}"
+        ):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                rel_path = os.path.relpath(key, f"{S3_MODELS_PREFIX}/{model_name}")
+                local_path = os.path.join("model_cache", model_name, rel_path)
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                s3.download_file(S3_BUCKET, key, local_path)
+
+        # Download metadata
+        s3.download_file(
+            S3_BUCKET,
+            f"{S3_MODELS_PREFIX}/feature_columns.json",
+            "model_cache/feature_columns.json",
+        )
+        s3.download_file(
+            S3_BUCKET,
+            f"{S3_MODELS_PREFIX}/valid_metadata.json",
+            "model_cache/valid_metadata.json",
+        )
+
+        # Try to load with joblib or pickle
+        import joblib
+        model_path = os.path.join("model_cache", model_name, "model.pkl")
+        if not os.path.exists(model_path):
+            # Try sklearn default naming
+            model_path = os.path.join("model_cache", model_name, "model.joblib")
+        if not os.path.exists(model_path):
+            # Try model.pkl in model_cache root
+            model_path = os.path.join("model_cache", "model.pkl")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found in expected locations.")
+        model = joblib.load(model_path)
+
+        with open("model_cache/feature_columns.json", "r") as f:
+            feat = json.load(f)
+        with open("model_cache/valid_metadata.json", "r") as f:
+            valid_metadata = json.load(f)
+
+        sale_feature_columns = feat.get("sale", [])
+        print("✅ Model and artifacts loaded from S3 successfully!")
+
+    except Exception as e:
+        print(f"❌ Model load failed: {e}")
+
+    return model, sale_feature_columns, valid_metadata
+
+model, sale_feature_columns, valid_metadata = load_model()
+
+# ---- Load location/property types ----
+locations = []
+propertyTypes = []
+
+
+def load_location_and_property_types():
+    global locations, propertyTypes
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT DISTINCT prop_type, location FROM property_data")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        locations = sorted({r["location"] for r in rows if r.get("location")})
+        propertyTypes = sorted({r["prop_type"] for r in rows if r.get("prop_type")})
+
+        return {"locations": locations, "prop_type": propertyTypes}
+    except Exception as e:
+        print(f" Failed to load locations/property types from DB: {e}")
+        return {"locations": [], "prop_type": []}
+
+
+load_location_and_property_types()
+
+
+# ---- Routes ----
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/auth/login")
+def login(body: LoginRequest):
+    print("inside login route backend with")
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM users WHERE email = %s", (body.email,))
+    user = cursor.fetchone()
+
+    if not user or body.password != user["upassword"]:
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    cursor.execute(
+        "UPDATE users SET in_session = TRUE, last_login = %s WHERE id = %s",
+        (datetime.utcnow(), user["id"])
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return {
+        "id": user["id"],
+        "email": user["email"],
+    }
+
+
+@app.post("/auth/logout")
+def logout(user_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("UPDATE users SET in_session = FALSE WHERE id = %s", (user_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return {"message": "Logged out successfully."}
+
+
+def get_current_user(user_id: int):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM users WHERE id = %s AND in_session = TRUE", (user_id,))
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Not logged in.")
+
+    return user
+
+
+@app.get("/")
+def home():
+    return {"message": "Zameen API is running"}
+
+
+@app.get("/listings")
+def get_listings(
+    limit: int = 20,
+    location: str | None = None,
+    prop_type: str | None = None,
+    purpose: str | None = None,  # "sale" or "rent"
+    min_price: float | None = None,
+    max_price: float | None = None,
+):
+    """
+    Return property listings with optional filtering applied in the database.
+    Supported filters (all optional):
+    - location: exact match on location column
+    - prop_type: exact match on prop_type column
+    - purpose: "sale" / "rent"
+    - min_price / max_price: numeric price range
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    query = """
+        SELECT id, prop_type, purpose, covered_area, price, location, beds, baths, amenities
+        FROM property_data
+        WHERE 1=1
+    """
+    params: list = []
+
+    if location:
+        query += " AND location = %s"
+        params.append(location)
+
+    if prop_type:
+        query += " AND prop_type = %s"
+        params.append(prop_type)
+
+    if purpose:
+        query += " AND purpose = %s"
+        params.append(purpose)
+
+    if min_price is not None:
+        query += " AND price >= %s"
+        params.append(min_price)
+
+    if max_price is not None:
+        query += " AND price <= %s"
+        params.append(max_price)
+
+    query += " LIMIT %s"
+    params.append(limit)
+
+    cursor.execute(query, tuple(params))
+    data = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return data
+
+
+@app.get("/listings/{listing_id}")
+def get_listing_by_id(listing_id: int):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    query = """
+        SELECT
+            p.id,
+            p.prop_type,
+            p.purpose,
+            p.covered_area,
+            p.price,
+            p.location,
+            p.beds,
+            p.baths,
+            p.amenities,
+            s.water_sentiment,
+            s.electricity_sentiment,
+            s.gas_sentiment,
+            s.traffic_sentiment,
+            s.safety_sentiment
+        FROM property_data p
+        LEFT JOIN location_sentiments s
+            ON LOWER(REPLACE(REPLACE(TRIM(s.location), ', ', ','), ' ,', ',')) =
+               LOWER(REPLACE(REPLACE(TRIM(p.location), ', ', ','), ' ,', ','))
+        WHERE p.id = %s
+        LIMIT 1
+    """
+    cursor.execute(query, (listing_id,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    # Fallback sentiment lookup in case join misses due subtle formatting/cleanup differences.
+    sentiment_cols = [
+        "water_sentiment",
+        "electricity_sentiment",
+        "gas_sentiment",
+        "traffic_sentiment",
+        "safety_sentiment",
+    ]
+    if row.get("location") and any(not row.get(c) for c in sentiment_cols):
+        lookup = """
+            SELECT
+                water_sentiment,
+                electricity_sentiment,
+                gas_sentiment,
+                traffic_sentiment,
+                safety_sentiment
+            FROM location_sentiments
+            WHERE LOWER(REPLACE(REPLACE(TRIM(location), ', ', ','), ' ,', ',')) =
+                  LOWER(REPLACE(REPLACE(TRIM(%s), ', ', ','), ' ,', ','))
+            LIMIT 1
+        """
+        conn2 = get_connection()
+        cursor2 = conn2.cursor(dictionary=True)
+        try:
+            cursor2.execute(lookup, (row["location"],))
+            srow = cursor2.fetchone() or {}
+            for c in sentiment_cols:
+                if not row.get(c):
+                    row[c] = srow.get(c)
+        finally:
+            cursor2.close()
+            conn2.close()
+
+    # Consistent defaults for detail page fields across the app.
+    row["prop_type"] = row.get("prop_type") or "N/A"
+    row["purpose"] = row.get("purpose") or "N/A"
+    row["location"] = row.get("location") or "N/A"
+    row["amenities"] = row.get("amenities") or "N/A"
+    return row
+
+
+@app.get("/locations")
+def get_locations(purpose: str = "sale"):
+    data = load_location_and_property_types()
+    return {"locations": data["locations"]}
+
+
+@app.get("/prop_type")
+def get_prop_type(purpose: str = "sale"):
+    data = load_location_and_property_types()
+    return {"prop_type": data["prop_type"]}
+
+
+# Prediction endpoint removed: feature deprecated and cleaned up
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+def cosine_similarity(a, b):
+    """Compute cosine similarity between two vectors with zero-division protection."""
+    a = np.array(a)
+    b = np.array(b)
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return np.dot(a, b) / (norm_a * norm_b)
+
+
+def to_python_number(value):
+    """Convert numpy scalar types to native Python numbers for JSON serialization."""
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def retrieve(query: str, n_results: int = 20, top_k: int = 7):
+    """
+    Enhanced RAG retrieval with advanced reranking:
+    - Hybrid scoring: semantic similarity + keyword matching
+    - Metadata-aware boosting
+    - Diversity filtering to avoid redundant results
+    """
+    try:
+        # Encode query
+        query_emb = embmodel.encode([query])[0]
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+
+        # Retrieve initial results from Chroma (get more for better reranking)
+        results = collections.query(
+            query_embeddings=[query_emb.tolist()],
+            n_results=n_results
+        )
+
+        docs = results["documents"][0]
+        metas = results["metadatas"][0]
+        ids = results.get("ids", [None] * len(docs))[0] if results.get("ids") else [None] * len(docs)
+
+        if not docs:
+            return {"documents": [], "metadatas": [], "scores": [], "ids": []}
+
+        # Enhanced reranking with multiple signals
+        doc_embeddings = embmodel.encode(docs)
+        semantic_scores = [cosine_similarity(query_emb, d_emb) for d_emb in doc_embeddings]
+        
+        # Keyword matching boost (simple TF-based)
+        keyword_boosts = []
+        for doc in docs:
+            doc_lower = doc.lower()
+            doc_words = set(doc_lower.split())
+            # Count matching keywords
+            matches = len(query_words.intersection(doc_words))
+            # Normalize by query length
+            keyword_score = matches / max(len(query_words), 1) if query_words else 0
+            keyword_boosts.append(keyword_score * 0.2)  # 20% boost max
+        
+        # Metadata boost (if location/property type matches query)
+        metadata_boosts = []
+        for meta in metas:
+            meta_boost = 0.0
+            if meta:
+                meta_str = " ".join(str(v).lower() for v in meta.values() if v)
+                meta_words = set(meta_str.split())
+                meta_matches = len(query_words.intersection(meta_words))
+                meta_boost = (meta_matches / max(len(query_words), 1)) * 0.15 if query_words else 0
+            metadata_boosts.append(meta_boost)
+        
+        # Combined scoring: semantic (70%) + keyword (20%) + metadata (10%)
+        combined_scores = [
+            (sem * 0.7) + (kw * 0.2) + (meta * 0.1)
+            for sem, kw, meta in zip(semantic_scores, keyword_boosts, metadata_boosts)
+        ]
+
+        # Sort by combined score
+        ranked = sorted(zip(docs, metas, ids, combined_scores, semantic_scores), 
+                       key=lambda x: x[3], reverse=True)
+        
+        # Diversity filtering: avoid very similar documents
+        final_docs = []
+        final_metas = []
+        final_scores = []
+        final_ids = []
+        seen_content = set()
+        
+        for doc, meta, doc_id, comb_score, sem_score in ranked:
+            # Simple deduplication: skip if very similar content already selected
+            doc_snippet = doc[:100].lower().strip()
+            if doc_snippet not in seen_content:
+                final_docs.append(doc)
+                final_metas.append(meta)
+                final_scores.append(comb_score)
+                final_ids.append(doc_id)
+                seen_content.add(doc_snippet)
+                
+                if len(final_docs) >= top_k:
+                    break
+
+        return {
+            "documents": final_docs,
+            "metadatas": final_metas,
+            "scores": [float(to_python_number(s)) for s in final_scores],
+            "ids": final_ids,
+        }
+    except Exception as e:
+        print(f"❌ Retrieval Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"documents": [], "metadatas": [], "scores": [], "ids": []}
+
+
+class ChatMessage(BaseModel):
+    role: str   # "user" or "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage]
+    model: str | None = None
+
+
+def extract_property_data(doc: str) -> dict:
+    """Extract structured property data from document text for mathematical operations and sentiment analysis."""
+    data = {}
+    try:
+        # Try to extract price
+        price_match = re.search(r'price[:\s]+([\d,]+)', doc, re.IGNORECASE)
+        if price_match:
+            data['price'] = float(price_match.group(1).replace(',', ''))
+        
+        # Extract area
+        area_match = re.search(r'(?:area|covered_area|size)[:\s]+([\d.]+)', doc, re.IGNORECASE)
+        if area_match:
+            data['area'] = float(area_match.group(1))
+        
+        # Extract beds/baths
+        beds_match = re.search(r'bed[s]?[:\s]+(\d+)', doc, re.IGNORECASE)
+        if beds_match:
+            data['beds'] = int(beds_match.group(1))
+        
+        baths_match = re.search(r'bath[s]?[:\s]+(\d+)', doc, re.IGNORECASE)
+        if baths_match:
+            data['baths'] = int(baths_match.group(1))
+        
+        # Extract location
+        location_match = re.search(r'location[:\s]+([A-Za-z\s,]+)', doc, re.IGNORECASE)
+        if location_match:
+            data['location'] = location_match.group(1).strip()
+        
+        # Extract property type
+        prop_type_match = re.search(r'(?:type|prop_type)[:\s]+([A-Za-z\s]+)', doc, re.IGNORECASE)
+        if prop_type_match:
+            data['prop_type'] = prop_type_match.group(1).strip()
+        
+        # Extract sentiment information if present
+        sentiment_keywords = ['water_sentiment', 'electricity_sentiment', 'gas_sentiment', 'traffic_sentiment', 'safety_sentiment']
+        for keyword in sentiment_keywords:
+            pattern = rf'{keyword}[:\s]+(good|fair|poor)', re.IGNORECASE
+            match = re.search(pattern, doc)
+            if match:
+                data[keyword] = match.group(1).capitalize()
+    except:
+        pass
+    return data
+
+
+def build_property_cards(bundles: List[dict]) -> List[dict]:
+    """
+    Prepare structured card data for retrieved properties.
+    Returns all meaningful retrieved properties (not hard-capped at 3).
+    """
+    cards: List[dict] = []
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+    except Exception:
+        conn = None
+        cursor = None
+    for idx, bundle in enumerate(bundles):
+        data = bundle.get("data") or {}
+        doc = bundle.get("doc", "")
+        meta = bundle.get("meta") or {}
+
+        price = data.get("price")
+        area = data.get("area")
+        beds = data.get("beds")
+        baths = data.get("baths")
+        location = data.get("location") or meta.get("location")
+        prop_type = data.get("prop_type") or meta.get("prop_type")
+        purpose = meta.get("purpose")
+
+        # Skip only when we truly have no usable identifying info.
+        if (
+            price is None
+            and area is None
+            and beds is None
+            and baths is None
+            and not location
+            and not prop_type
+        ):
+            continue
+
+        price_per_area = (price / area) if price and area and area != 0 else None
+
+        # Prefer exact retrieved ID when available.
+        raw_bundle_id = bundle.get("doc_id") or meta.get("id")
+        resolved_id = None
+        if raw_bundle_id is not None and str(raw_bundle_id).strip():
+            raw_text = str(raw_bundle_id).strip()
+            # Chroma IDs may include prefixes; extract trailing integer when possible.
+            m = re.search(r"(\d+)$", raw_text)
+            if m:
+                resolved_id = int(m.group(1))
+            elif raw_text.isdigit():
+                resolved_id = int(raw_text)
+        # Fallback: extract property id directly from retrieved document content.
+        if resolved_id is None and doc:
+            m_doc = re.search(r"property\s*id\s*[:#]?\s*(\d+)", doc, flags=re.IGNORECASE)
+            if m_doc:
+                resolved_id = int(m_doc.group(1))
+        amenities = None
+        if cursor and resolved_id is not None:
+            try:
+                cursor.execute(
+                    "SELECT id, amenities FROM property_data WHERE id = %s LIMIT 1",
+                    (resolved_id,),
+                )
+                matched = cursor.fetchone()
+                if matched:
+                    resolved_id = matched.get("id")
+                    amenities = matched.get("amenities")
+                else:
+                    # If retrieved ID doesn't exist in property_data, drop linkability.
+                    resolved_id = None
+            except Exception:
+                resolved_id = None
+
+        # Hard rule: only keep properties grounded to an actual retrieved property id.
+        if resolved_id is None:
+            continue
+
+        cards.append(
+            {
+                "id": resolved_id,
+                "detail_url": f"/property/{resolved_id}" if resolved_id else None,
+                "label": prop_type or f"Property {idx+1}",
+                "location": location,
+                "purpose": purpose,
+                "price": to_python_number(price),
+                "area": to_python_number(area),
+                "beds": beds,
+                "baths": baths,
+                "amenities": amenities,
+                "price_per_area": to_python_number(price_per_area),
+                "score": to_python_number(bundle.get("score")),
+                "snippet": doc[:280],
+            }
+        )
+
+    if cursor:
+        cursor.close()
+    if conn:
+        conn.close()
+    # Deduplicate by resolved property id (fallback to label+location) while
+    # preserving retrieval order.
+    seen = set()
+    deduped = []
+    for c in cards:
+        key = c.get("id") if c.get("id") is not None else f"{c.get('label')}|{c.get('location')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+    return deduped
+
+
+def build_comparison_insights(cards: List[dict]) -> str:
+    """Produce textual insights (cheapest, best value, etc.) for prompt guidance."""
+    if not cards:
+        return "Not enough structured data for comparison."
+
+    insights = []
+    priced = [c for c in cards if isinstance(c.get("price"), (int, float))]
+    areas = [c for c in cards if isinstance(c.get("area"), (int, float))]
+    value_props = [c for c in cards if isinstance(c.get("price_per_area"), (int, float))]
+
+    if priced:
+        cheapest = min(priced, key=lambda x: x["price"])
+        insights.append(
+            f"Cheapest option: {cheapest['label']} at PKR {cheapest['price']:,.0f}"
+        )
+    if priced:
+        premium = max(priced, key=lambda x: x["price"])
+        insights.append(
+            f"Highest budget option: {premium['label']} at PKR {premium['price']:,.0f}"
+        )
+    if areas:
+        largest = max(areas, key=lambda x: x["area"])
+        insights.append(
+            f"Largest covered area: {largest['label']} with {largest['area']} units"
+        )
+    if value_props:
+        best_value = min(value_props, key=lambda x: x["price_per_area"])
+        insights.append(
+            f"Best price/area: {best_value['label']} at PKR {best_value['price_per_area']:,.0f} per unit"
+        )
+
+    if not insights:
+        return "Structured comparison unavailable."
+
+    return "\n".join(insights)
+
+
+def pick_discussed_properties(cards: List[dict], answer_text: str, max_links: int | None = None) -> List[dict]:
+    """
+    Keep only properties that are likely discussed in the generated answer.
+    Falls back to top-ranked few if text matching is inconclusive.
+    """
+    if not cards:
+        return []
+
+    text = (answer_text or "").lower()
+    id_mentions = set(
+        int(m.group(1))
+        for m in re.finditer(r"property\s*id\s*[:#]?\s*(\d+)", text, flags=re.IGNORECASE)
+    )
+    if id_mentions:
+        strict = [c for c in cards if c.get("id") in id_mentions]
+        if strict:
+            return strict if max_links is None else strict[:max_links]
+
+    scored = []
+    for c in cards:
+        if not c.get("id"):
+            continue
+        score = 0.0
+        label = str(c.get("label") or "").lower().strip()
+        location = str(c.get("location") or "").lower().strip()
+        purpose = str(c.get("purpose") or "").lower().strip()
+        retrieval_score = float(c.get("score") or 0.0)
+
+        # Stronger matching: require richer evidence, not single-word overlap.
+        label_hit = bool(label and label in text)
+        location_hit = bool(location and location in text)
+        if label_hit and location_hit:
+            score += 3.0
+        elif location_hit:
+            score += 1.5
+        elif label_hit:
+            score += 1.0
+        if purpose and purpose in text:
+            score += 0.5
+        score += retrieval_score
+        scored.append((score, retrieval_score, c))
+
+    # If we matched terms from the response, prioritize those.
+    matched = [item for item in scored if item[0] >= (item[1] + 1.0)]
+    if matched:
+        matched.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        selected = [x[2] for x in matched]
+        return selected if max_links is None else selected[:max_links]
+
+    # Otherwise, return all retrieval-grounded cards (no arbitrary cap).
+    return cards if max_links is None else cards[:max_links]
+
+
+def clean_generated_response(text: str) -> str:
+    """
+    Improve final formatting and remove internal retrieval labels like 'Document 1'.
+    """
+    if not text:
+        return text
+    out = text.replace("\r\n", "\n")
+    # Remove lines that start with retrieval labels.
+    out = re.sub(r"(?im)^\s*document\s*\d+\s*[:\-].*$", "", out)
+    out = re.sub(r"(?im)\bdocument\s*\d+\b", "property", out)
+    # Collapse excessive blank lines.
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
+
+
+def query_hf(prompt: str, model: str | None = None) -> str:
+    """
+    Generate chat response using huggingface_hub.InferenceClient chat completions API.
+    Mirrors the style used in your provided nlpminiproj backend.
+    """
+    if not HF_API_TOKEN:
+        raise RuntimeError("HF_API_TOKEN not set")
+
+    selected_model = (model or HF_CHAT_MODEL).strip()
+    client = InferenceClient(model=selected_model, token=HF_API_TOKEN, timeout=HF_TIMEOUT_SECONDS)
+    system_prompt = (
+        "You are a helpful Pakistan real estate assistant. "
+        "Use provided context, stay concise, and include concrete numbers when available."
+    )
+    try:
+        response = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=HF_MAX_NEW_TOKENS,
+            temperature=0.35,
+            top_p=0.9,
+        )
+        return (response.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[HF Chat Error] {e}")
+        return ""
+
+# After RAG retrieval, filter by purpose and type from metadata
+def filter_by_intent(docs, metas, ids, scores, query_lower):
+    purpose_filter = None
+    if "for sale" in query_lower or "sale" in query_lower:
+        purpose_filter = "sale"
+    elif "for rent" in query_lower or "rent" in query_lower:
+        purpose_filter = "rent"
+
+    type_filter = None
+    if "house" in query_lower or "houses" in query_lower:
+        type_filter = "house"
+    elif "plot" in query_lower or "plots" in query_lower:
+        type_filter = "plot"
+    elif "apartment" in query_lower or "flat" in query_lower or "apartments" in query_lower or "flats" in query_lower:
+        type_filter = "apartment"
+
+    filtered = []
+    for doc, meta, doc_id, score in zip(docs, metas, ids, scores):
+        doc_lower = doc.lower()
+        if purpose_filter and f"for {purpose_filter}" not in doc_lower:
+            continue
+        if type_filter and type_filter not in doc_lower:
+            continue
+        filtered.append((doc, meta, doc_id, score))
+    
+    return zip(*filtered) if filtered else ([], [], [], [])
+
+
+def generate_chat_response(messages: List[ChatMessage], model: str | None = None) -> dict:
+    try:
+        last_user = messages[-1].content
+        print(f"Received user message: {last_user}")
+        user_messages = [m.content for m in messages if m.role == "user"]
+        if len(user_messages) > 1 and user_messages[-1] == user_messages[-2]:
+            return {
+                "text": "I just answered that question. Would you like more details or a different question?",
+                "properties": [],
+            }
+        recent_messages = messages[-6:] if len(messages) > 6 else messages
+        conversation_history = "\n".join(
+            f"{'User' if m.role == 'user' else 'Assistant'}: {m.content[:220]}"
+            for m in recent_messages[:-1]
+        )
+        print(f"Conversation history for context:\n{conversation_history}")
+        key_facts = []
+        for msg in recent_messages:
+            content_lower = msg.content.lower()
+            if any(word in content_lower for word in ["location", "area", "budget", "price", "beds", "baths"]):
+                key_facts.append(f"User mentioned: {msg.content[:120]}")
+
+        key_facts_str = "\n".join(key_facts[-4:]) if key_facts else "No specific preferences mentioned yet."
+        print(f"Extracted key facts:\n{key_facts_str}")
+        # 4. Enhanced Query Rewriting with context awareness
+        rewrite_prompt = f"""You are helping rewrite a user query for property search.
+
+Conversation context (excluding the latest user turn):
+{conversation_history}
+
+Key facts extracted:
+{key_facts_str}
+
+Current user message: "{last_user}"
+
+Rewrite this into an optimal search query for finding property listings. Include relevant context from the conversation.
+Return ONLY the rewritten query, nothing else."""
+
+        print(f"============== Rewrite prompt:\n{rewrite_prompt}")
+
+        try:
+            # rewritten_query = googlemodel.models.generate_content(
+            #     model="gemini-2.0-flash",
+            #     contents=rewrite_prompt,
+            # ).text.strip()
+            rewritten_query = groq_generate(rewrite_prompt)
+            print(f"============== GROQ Rewritten query: {rewritten_query}")
+        except Exception as e:
+            print(f"⚠️ Query rewrite failed: {e}, using original message")
+            rewritten_query = last_user
+
+        # 5. Enhanced RAG Retrieval
+        rag_results = retrieve(rewritten_query, n_results=20, top_k=7)
+        context_docs, context_metas, context_ids, context_scores = filter_by_intent(
+        rag_results["documents"],
+        rag_results.get("metadatas", []),
+        rag_results.get("ids", []),
+        rag_results.get("scores", []),
+        rewritten_query.lower()
+        )
+        print(f"============ RAG retrieved {len(rag_results.get('documents', []))} documents.")
+        print(f"========== RAG retrieved documents:\n{rag_results.get('documents', [])}")
+        context_docs = rag_results["documents"]
+        context_scores = rag_results["scores"]
+        print(f"============ RAG context scores: {context_scores}")
+        context_metas = rag_results.get("metadatas", []) or []
+        print(f"============ RAG context metas: {context_metas}")
+        context_ids = rag_results.get("ids", []) or []
+        print(f"============ RAG context ids: {context_ids}")
+        bundled_results = []
+        formatted_context_parts = []
+        sentiment_info = []
+        for idx, doc in enumerate(context_docs):
+            score = context_scores[idx] if idx < len(context_scores) else 0.0
+            meta = context_metas[idx] if idx < len(context_metas) else {}
+            doc_id = context_ids[idx] if idx < len(context_ids) else None
+            prop_data = extract_property_data(doc)
+            bundle = {"doc": doc, "score": score, "meta": meta or {}, "data": prop_data, "doc_id": doc_id}
+            bundled_results.append(bundle)
+            doc_lower = doc.lower()
+            if any(word in doc_lower for word in ['sentiment', 'water', 'electricity', 'gas', 'traffic', 'safety', 'good', 'fair', 'poor']):
+                location = prop_data.get("location") or meta.get("location", "")
+                if location:
+                    sentiment_info.append(f"Location: {location} - Sentiment data available in document")
+            info_parts = [f"Retrieved property (relevance: {score:.3f})"]
+            if doc_id:
+                display_id = doc_id.replace("joined_", "") if doc_id else None
+                if display_id:
+                    info_parts.append(f"Property ID: {display_id}")
+                info_parts.append(f"Property ID: {doc_id}")
+            if prop_data.get("price"):
+                info_parts.append(f"Price: PKR {prop_data['price']:,.0f}")
+            if prop_data.get("area"):
+                info_parts.append(f"Area: {prop_data['area']} sq units")
+            if prop_data.get("location"):
+                info_parts.append(f"Location: {prop_data['location']}")
+            if prop_data.get("beds"):
+                info_parts.append(f"Beds: {prop_data['beds']}")
+            if prop_data.get("baths"):
+                info_parts.append(f"Baths: {prop_data['baths']}")
+            formatted_context_parts.append(f"{' | '.join(info_parts)}\nContent: {doc[:340]}")
+        context = (
+            "\n\n---\n\n".join(formatted_context_parts)
+            if formatted_context_parts
+            else "[No relevant documents found. Use general knowledge.]"
+        )
+        structured_cards = build_property_cards(bundled_results)
+        print(f"============ Structured property cards: {structured_cards}")
+        comparison_summary = build_comparison_insights(structured_cards)
+        print(f"============ Comparison insights: {comparison_summary}")
+        avg_score = np.mean(context_scores) if context_scores else 0.0
+        use_context = avg_score > 0.25
+        sentiment_context = "\n".join(sentiment_info) if sentiment_info else "No specific sentiment data found in retrieved documents."
+        main_prompt = f"""You are a Pakistan real-estate assistant.
+Return a high-quality, well-structured response in markdown.
+Do NOT mention document numbers or retrieval internals.
+When discussing a property, explicitly mention its Property ID where available.
+Use this exact structure:
+## Summary
+## Recommended Properties
+- One bullet per property with: Property ID, location, type, purpose, price, beds, baths, covered area.
+## Sentiment Notes
+## Why These Match
+
+Rules:
+- Use only details present in context; if missing, say "not available".
+- Use concise bullets and clear numbers.
+- If comparing, include quick math (e.g., price differences / price per area when available).
+
+Listing context:
+{context if use_context else 'Limited listing context available.'}
+Sentiment context:
+{sentiment_context}
+Comparison hints:
+{comparison_summary}
+Recent conversation:
+{conversation_history}
+Key facts:
+{key_facts_str}
+User query:
+{last_user}
+        
+INSTRUCTIONS:
+1. If the user asks to compare, sort, or calculate (e.g., "cheapest", "best value", "price per sq ft"), use the retrieved property data to perform mathematical operations
+2. Extract numbers from documents: prices, areas, beds, baths
+3. Calculate metrics like price per square unit when relevant
+4. Sort properties mathematically when asked (by price, area, value, etc.)
+5. When comparing properties, provide detailed comparisons including:
+   - Price differences and value analysis
+   - Size and space comparisons
+   - Location advantages/disadvantages
+   - Sentiment information (water, electricity, gas, traffic, safety) when available in the context
+6. Be conversational - reference previous parts of the conversation naturally
+7. If data is available, cite specific numbers and properties with clear reasoning
+8. Show your mathematical reasoning: explain how you calculated or compared values
+9. Include sentiment information when discussing locations - mention water, electricity, gas, traffic, and safety conditions if found in the retrieved documents
+10. Format your response with clear paragraphs and use bullet points for comparisons when listing multiple properties
+11. If the user asks about locations/types not in context, acknowledge it and provide general guidance
+
+RESPOND AS ASSISTANT:
+Provide a comprehensive, well-formatted response that:
+- Answers the user's question directly and conversationally
+- Includes specific numbers and calculations when comparing properties
+- Mentions location sentiments (water, electricity, gas, traffic, safety) when available
+- Uses clear paragraphs and bullet points for readability
+- Shows mathematical reasoning for any calculations or comparisons"""
+
+        output = groq_generate(main_prompt)
+        print(f"============ Raw generated response:\n{output}")
+        generated = output.strip()
+        #generated = clean_generated_response(generated)
+        print(f"============ Cleaned generated response:\n{generated}")
+
+        # Final duplicate check
+        recent_assistant = [m.content for m in reversed(messages) if m.role == "assistant"]
+        if recent_assistant and recent_assistant[0].strip() == generated.strip():
+            generated = "I've already provided that information. Would you like me to expand on a specific aspect or help with something else?"
+        filtered_cards = pick_discussed_properties(structured_cards, generated, max_links=None)
+        print(f"============ Filtered property cards: {filtered_cards}")
+        return {"text": generated, "properties": filtered_cards}
+    except Exception as e:
+        print(f"Chat Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "text": "Sorry, I encountered an error. Please try again.",
+            "properties": [],
+        }
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    """Chat endpoint - returns a SINGLE high-quality text response per request."""
+    payload = generate_chat_response(req.messages, model=req.model)
+    #print("Payload response: ",payload)
+    return {
+        "response": payload.get("text"),
+        "properties": payload.get("properties", []),  # No cards - all info in text response
+    }
+
+class AddListingRequest(BaseModel):
+    prop_type: str
+    purpose: str
+    covered_area: float
+    price: float
+    location: str
+    beds: int
+    baths: int
+    amenities: str = ''
+
+
+@app.post("/listings/add")
+def add_listing(body: AddListingRequest):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO property_data (prop_type, purpose, covered_area, price, location, beds, baths, amenities)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            body.prop_type,
+            body.purpose,
+            body.covered_area,
+            body.price,
+            body.location,
+            body.beds,
+            body.baths,
+            body.amenities,
+        )
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return {"success": True, "message": "Listing added successfully."}
