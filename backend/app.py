@@ -916,41 +916,86 @@ def generate_chat_response(messages: List[ChatMessage], model: str | None = None
 
         key_facts_str = "\n".join(key_facts[-4:]) if key_facts else "No specific preferences mentioned yet."
         print(f"Extracted key facts:\n{key_facts_str}")
-        # 4. Enhanced Query Rewriting with context awareness
-        rewrite_prompt = f"""You are helping rewrite a user query for property search.
+        # 4. Intent Detection + Query Rewriting
+        intent_prompt = f"""You are an assistant for a Pakistan real estate platform. Classify the user's message into one of these intents and respond accordingly.
 
-Conversation context (excluding the latest user turn):
+INTENTS:
+- greeting: user is saying hi, hello, thanks, or making small talk with no property-related request
+- pitch_request: user wants a sales pitch written for one or more properties to show to a buyer
+- property_search: user is looking for properties (describing requirements, asking for listings, comparing, filtering)
+- general_chat: user is asking a general question or following up that doesn't require searching listings
+
+Conversation context:
 {conversation_history}
 
-Key facts extracted:
+Key facts from conversation:
 {key_facts_str}
 
 Current user message: "{last_user}"
 
-Rewrite this into an optimal search query for finding property listings. Include relevant context from the conversation.
-Return ONLY the rewritten query, nothing else."""
+RULES:
+- If intent is "greeting" or "general_chat": return ONLY this format:
+  INTENT: greeting
+  QUERY: {last_user}
 
-        print(f"============== Rewrite prompt:\n{rewrite_prompt}")
+- If intent is "pitch_request": extract what property/properties the user wants pitched and return:
+  INTENT: pitch_request
+  QUERY: <search terms to find those properties via RAG, e.g. "3 bed house for sale DHA Karachi">
 
+- If intent is "property_search": rewrite the user message into an optimized search query incorporating context, return:
+  INTENT: property_search
+  QUERY: <rewritten search query>
+
+Return ONLY the two lines (INTENT and QUERY). Nothing else."""
+
+        print(f"============== Intent prompt:\n{intent_prompt}")
+
+        detected_intent = "property_search"
+        rewritten_query = last_user
         try:
-            # rewritten_query = googlemodel.models.generate_content(
-            #     model="gemini-2.0-flash",
-            #     contents=rewrite_prompt,
-            # ).text.strip()
-            rewritten_query = groq_generate(rewrite_prompt)
-            print(f"============== GROQ Rewritten query: {rewritten_query}")
+            intent_response = groq_generate(intent_prompt)
+            print(f"============== Intent response: {intent_response}")
+            for line in intent_response.strip().splitlines():
+                line = line.strip()
+                if line.upper().startswith("INTENT:"):
+                    detected_intent = line.split(":", 1)[1].strip().lower()
+                elif line.upper().startswith("QUERY:"):
+                    rewritten_query = line.split(":", 1)[1].strip()
+            print(f"============== Detected intent: {detected_intent} | Rewritten query: {rewritten_query}")
         except Exception as e:
-            print(f"⚠️ Query rewrite failed: {e}, using original message")
+            print(f"⚠️ Intent detection failed: {e}, defaulting to property_search")
+            detected_intent = "property_search"
             rewritten_query = last_user
 
-        # 5. Enhanced RAG Retrieval
+        # 5. Intent-driven RAG + Response
+        # For greetings and general chat, skip RAG entirely and respond directly
+        if detected_intent in ("greeting", "general_chat"):
+            print(f"============ Skipping RAG for intent: {detected_intent}")
+            chitchat_prompt = f"""You are a friendly Pakistan real estate assistant named Zameen Assistant.
+The user is not asking about a property right now — just have a natural, warm conversation.
+
+Recent conversation:
+{conversation_history}
+
+User message: "{last_user}"
+
+Respond conversationally in 1-3 sentences. Do NOT list properties, use markdown headers, or mention retrieval.
+If the user greeted you, greet them back warmly and let them know you can help find properties, write pitches, or answer real estate questions."""
+            generated = groq_generate(chitchat_prompt).strip()
+            print(f"============ Chitchat response:\n{generated}")
+            recent_assistant = [m.content for m in reversed(messages) if m.role == "assistant"]
+            if recent_assistant and recent_assistant[0].strip() == generated.strip():
+                generated = "Happy to help! What are you looking for today?"
+            return {"text": generated, "properties": []}
+
+        # For property_search and pitch_request — run RAG
         rag_results = retrieve(rewritten_query, n_results=20, top_k=7)
         context_docs, context_metas, context_ids, context_scores = filter_by_intent(
-        rag_results["documents"],
-        rag_results.get("metadatas", []),
-        rag_results.get("ids", []),
-        rag_results.get("scores", []),
-        rewritten_query.lower()
+            rag_results["documents"],
+            rag_results.get("metadatas", []),
+            rag_results.get("ids", []),
+            rag_results.get("scores", []),
+            rewritten_query.lower()
         )
         print(f"============ RAG retrieved {len(rag_results.get('documents', []))} documents.")
         print(f"========== RAG retrieved documents:\n{rag_results.get('documents', [])}")
@@ -996,7 +1041,7 @@ Return ONLY the rewritten query, nothing else."""
         context = (
             "\n\n---\n\n".join(formatted_context_parts)
             if formatted_context_parts
-            else "[No relevant documents found. Use general knowledge.]"
+            else "[No relevant property listings found.]"
         )
         structured_cards = build_property_cards(bundled_results)
         print(f"============ Structured property cards: {structured_cards}")
@@ -1005,70 +1050,80 @@ Return ONLY the rewritten query, nothing else."""
         avg_score = np.mean(context_scores) if context_scores else 0.0
         use_context = avg_score > 0.25
         sentiment_context = "\n".join(sentiment_info) if sentiment_info else "No specific sentiment data found in retrieved documents."
-        main_prompt = f"""You are a Pakistan real-estate assistant.
-Return a high-quality, well-structured response in markdown.
-Do NOT mention document numbers or retrieval internals.
-When discussing a property, explicitly mention its Property ID where available.
-Use this exact structure:
-## Summary
-## Recommended Properties
-- One bullet per property with: Property ID, location, type, purpose, price, beds, baths, covered area.
-## Sentiment Notes
-## Why These Match
 
-Rules:
-- Use only details present in context; if missing, say "not available".
-- Use concise bullets and clear numbers.
-- If comparing, include quick math (e.g., price differences / price per area when available).
+        # Build the correct main prompt based on intent
+        if detected_intent == "pitch_request":
+            main_prompt = f"""You are a skilled real estate agent in Pakistan. A client has asked you to write a compelling sales pitch for one or more properties to present to a potential buyer.
 
-Listing context:
-{context if use_context else 'Limited listing context available.'}
-Sentiment context:
+Retrieved property data:
+{context if use_context else '[No listings found — inform the user politely.]'}
+
+Sentiment data for locations:
 {sentiment_context}
-Comparison hints:
-{comparison_summary}
+
 Recent conversation:
 {conversation_history}
-Key facts:
-{key_facts_str}
-User query:
-{last_user}
-        
-INSTRUCTIONS:
-1. If the user asks to compare, sort, or calculate (e.g., "cheapest", "best value", "price per sq ft"), use the retrieved property data to perform mathematical operations
-2. Extract numbers from documents: prices, areas, beds, baths
-3. Calculate metrics like price per square unit when relevant
-4. Sort properties mathematically when asked (by price, area, value, etc.)
-5. When comparing properties, provide detailed comparisons including:
-   - Price differences and value analysis
-   - Size and space comparisons
-   - Location advantages/disadvantages
-   - Sentiment information (water, electricity, gas, traffic, safety) when available in the context
-6. Be conversational - reference previous parts of the conversation naturally
-7. If data is available, cite specific numbers and properties with clear reasoning
-8. Show your mathematical reasoning: explain how you calculated or compared values
-9. Include sentiment information when discussing locations - mention water, electricity, gas, traffic, and safety conditions if found in the retrieved documents
-10. Format your response with clear paragraphs and use bullet points for comparisons when listing multiple properties
-11. If the user asks about locations/types not in context, acknowledge it and provide general guidance
 
-RESPOND AS ASSISTANT:
-Provide a comprehensive, well-formatted response that:
-- Answers the user's question directly and conversationally
-- Includes specific numbers and calculations when comparing properties
-- Mentions location sentiments (water, electricity, gas, traffic, safety) when available
-- Uses clear paragraphs and bullet points for readability
-- Shows mathematical reasoning for any calculations or comparisons"""
+User's request: "{last_user}"
+
+INSTRUCTIONS:
+- Write a persuasive, professional pitch in flowing prose (not a dry bullet list).
+- Open with a strong hook about why these properties are worth considering.
+- For each property, highlight: location, size, beds/baths, price, and any standout features or sentiment advantages (good utilities, safety, low traffic).
+- Mention the Property ID naturally so the buyer can follow up.
+- Close with a call to action encouraging the buyer to schedule a viewing.
+- Do NOT mention document retrieval, scores, or internal system details.
+- Use markdown for structure only if there are multiple properties (e.g. a heading per property). For a single property, write one cohesive pitch."""
+
+        else:  # property_search
+            main_prompt = f"""You are a knowledgeable Pakistan real estate assistant.
+Do NOT mention document numbers or retrieval internals.
+When discussing a property, mention its Property ID so the user can view it.
+
+Retrieved listings:
+{context if use_context else 'Limited listing context available.'}
+
+Sentiment data:
+{sentiment_context}
+
+Comparison insights:
+{comparison_summary}
+
+Recent conversation:
+{conversation_history}
+
+Key facts from conversation:
+{key_facts_str}
+
+User query: "{last_user}"
+
+RESPONSE RULES:
+- If the user is browsing or wants recommendations: use this structure in markdown:
+  ## Here's what I found
+  - One bullet per property: Property ID, location, type, purpose, price, beds, baths, area.
+  ## Why These Match
+  (brief explanation)
+  ## Location Notes
+  (sentiment info if available: water, electricity, gas, traffic, safety)
+
+- If the user is comparing or asking for calculations (cheapest, best value, price per sqft):
+  Show the math clearly. Sort and rank. Explain your reasoning.
+
+- If the user asks a follow-up or conversational question about already-listed properties:
+  Answer naturally without re-listing everything. Reference properties by ID.
+
+- Always use only details present in the retrieved context. If something is missing, say "not available".
+- Never fabricate property details."""
 
         output = groq_generate(main_prompt)
         print(f"============ Raw generated response:\n{output}")
         generated = output.strip()
-        #generated = clean_generated_response(generated)
-        print(f"============ Cleaned generated response:\n{generated}")
+        print(f"============ Final response:\n{generated}")
 
         # Final duplicate check
         recent_assistant = [m.content for m in reversed(messages) if m.role == "assistant"]
         if recent_assistant and recent_assistant[0].strip() == generated.strip():
-            generated = "I've already provided that information. Would you like me to expand on a specific aspect or help with something else?"
+            generated = "I've already covered that. Would you like me to dig deeper or help with something else?"
         filtered_cards = pick_discussed_properties(structured_cards, generated, max_links=None)
         print(f"============ Filtered property cards: {filtered_cards}")
         return {"text": generated, "properties": filtered_cards}
