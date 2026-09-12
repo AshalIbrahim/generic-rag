@@ -3,8 +3,9 @@ import os
 from sentence_transformers import SentenceTransformer
 import chromadb
 from typing import List
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+import io
 import mysql.connector
 import pandas as pd
 import json
@@ -19,6 +20,7 @@ from huggingface_hub import InferenceClient
 from pathlib import Path
 
 
+
 load_dotenv()
 from google import genai
 from groq import Groq
@@ -30,7 +32,8 @@ print("API key:", os.getenv("GROQ_API_KEY"))
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 def groq_generate(prompt: str) -> str:
-    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    #models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    models = ["openai/gpt-oss-120b","openai/gpt-oss-120b"]
     for model in models:
         try:
             response = groq_client.chat.completions.create(
@@ -68,8 +71,7 @@ app = FastAPI(title="Zameen MLOps API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://robin-overtake-discover.ngrok-free.dev",
-        "http://localhost:5173"
+        "https://robin-overtake-discover.ngrok-free.dev"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -203,7 +205,7 @@ def load_model(model_name="ZameenPriceModelSale"):
 
     return model, sale_feature_columns, valid_metadata
 
-model, sale_feature_columns, valid_metadata = load_model()
+# model, sale_feature_columns, valid_metadata = load_model()
 
 # ---- Load location/property types ----
 locations = []
@@ -1053,7 +1055,7 @@ If the user greeted you, greet them back warmly and let them know you can help f
 
         # Build the correct main prompt based on intent
         if detected_intent == "pitch_request":
-            main_prompt = f"""You are a skilled real estate agent in Pakistan. A client has asked you to write a compelling sales pitch for one or more properties to present to a potential buyer.
+            main_prompt = f"""You are coaching an experienced, consultative real estate agent in Pakistan who is on a live call with a buyer right now. Generate quick-reference talking points the agent can glance at mid-call — not a written pitch for the buyer to read.
 
 Retrieved property data:
 {context if use_context else '[No listings found — inform the user politely.]'}
@@ -1066,14 +1068,28 @@ Recent conversation:
 
 User's request: "{last_user}"
 
-INSTRUCTIONS:
-- Write a persuasive, professional pitch in flowing prose (not a dry bullet list).
-- Open with a strong hook about why these properties are worth considering.
-- For each property, highlight: location, size, beds/baths, price, and any standout features or sentiment advantages (good utilities, safety, low traffic).
-- Mention the Property ID naturally so the buyer can follow up.
-- Close with a call to action encouraging the buyer to schedule a viewing.
+STEP 1 — Infer buyer intent first (use this to choose what to surface, don't show it as a separate section):
+From the request and conversation, work out what likely matters most to this buyer — budget sensitivity, family size, location prestige, investment vs. living, commute, security, etc.
+
+STEP 2 — Rank properties honestly:
+If multiple properties are retrieved, order them strongest match first. Give the best match the most space; mention weaker matches briefly and be honest about where they fall short.
+
+FORMAT — output exactly this structure per property:
+
+**[Property ID] — [location], [type], PKR [price]**
+- Key facts: beds, baths, area (only what's in the data — say "not available" if missing)
+- Why it fits this buyer: 1-2 short selling angles tied to their inferred needs, not a generic feature list
+- Say if asked about condition/location: one short phrase the agent can say out loud, using sentiment data cautiously (e.g. "residents have reported good water supply" — only if present in the data)
+
+After all properties, add:
+**Closing line to use:** one natural, short line to move the call forward (e.g. suggest a viewing or next step) — not a generic CTA.
+
+RULES (non-negotiable):
+- Never invent details. Only use what's in the retrieved property data. Missing info = say "not available," don't guess.
+- Keep every bullet short enough to read at a glance mid-call — no paragraphs, no flowing prose.
+- Treat sentiment data as supporting color, not fact — phrase it as reported/observed, not guaranteed.
 - Do NOT mention document retrieval, scores, or internal system details.
-- Use markdown for structure only if there are multiple properties (e.g. a heading per property). For a single property, write one cohesive pitch."""
+- Do not include objection-handling scripts (e.g. price pushback responses) — facts and selling angles only."""
 
         else:  # property_search
             main_prompt = f"""You are a knowledgeable Pakistan real estate assistant.
@@ -1099,11 +1115,11 @@ User query: "{last_user}"
 
 RESPONSE RULES:
 - If the user is browsing or wants recommendations: use this structure in markdown:
-  ## Here's what I found
+    Here's what I found
   - One bullet per property: Property ID, location, type, purpose, price, beds, baths, area.
-  ## Why These Match
+  Why These Match
   (brief explanation)
-  ## Location Notes
+  Location Notes
   (sentiment info if available: water, electricity, gas, traffic, safety)
 
 - If the user is comparing or asking for calculations (cheapest, best value, price per sqft):
@@ -1183,3 +1199,159 @@ def add_listing(body: AddListingRequest):
     conn.close()
 
     return {"success": True, "message": "Listing added successfully."}
+
+    # ---- Bulk property upload ----
+REQUIRED_LISTING_COLUMNS = ["prop_type", "purpose", "covered_area", "price", "location", "beds", "baths"]
+
+
+def validate_property_row(row: dict, row_num: int):
+    """Validate and coerce a single row from an uploaded listings file.
+
+    Returns (cleaned_dict, None) on success, or (None, error_message) on failure.
+    row_num is the 1-indexed row number as it appears in the original file
+    (used only for error messages, not stored).
+    """
+    errors = []
+    cleaned = {}
+
+    prop_type = str(row.get("prop_type", "")).strip()
+    if not prop_type or prop_type.lower() == "nan":
+        errors.append("missing prop_type")
+    cleaned["prop_type"] = prop_type
+
+    purpose = str(row.get("purpose", "")).strip()
+    if not purpose or purpose.lower() == "nan":
+        errors.append("missing purpose")
+    cleaned["purpose"] = purpose
+
+    location = str(row.get("location", "")).strip()
+    if not location or location.lower() == "nan":
+        errors.append("missing location")
+    cleaned["location"] = location
+
+    try:
+        cleaned["covered_area"] = float(row.get("covered_area"))
+        if cleaned["covered_area"] <= 0:
+            errors.append("covered_area must be positive")
+    except (TypeError, ValueError):
+        errors.append("invalid covered_area")
+
+    try:
+        cleaned["price"] = float(row.get("price"))
+        if cleaned["price"] <= 0:
+            errors.append("price must be positive")
+    except (TypeError, ValueError):
+        errors.append("invalid price")
+
+    try:
+        cleaned["beds"] = int(row.get("beds"))
+        if cleaned["beds"] < 0:
+            errors.append("beds cannot be negative")
+    except (TypeError, ValueError):
+        errors.append("invalid beds")
+
+    try:
+        cleaned["baths"] = int(row.get("baths"))
+        if cleaned["baths"] < 0:
+            errors.append("baths cannot be negative")
+    except (TypeError, ValueError):
+        errors.append("invalid baths")
+
+    amenities = row.get("amenities", "")
+    cleaned["amenities"] = "" if pd.isna(amenities) else str(amenities).strip()
+
+    if errors:
+        return None, f"Row {row_num}: " + "; ".join(errors)
+    return cleaned, None
+
+
+@app.post("/listings/bulk-upload")
+async def bulk_upload_listings(file: UploadFile = File(...)):
+    """Upload a CSV or XLSX file of properties and insert the valid rows.
+
+    Expects a header row with (at least) these columns:
+    prop_type, purpose, covered_area, price, location, beds, baths
+    amenities is optional.
+
+    Invalid rows are skipped individually (not an all-or-nothing batch) and
+    reported back so the uploader knows exactly what failed and why.
+    """
+    filename = (file.filename or "").lower()
+    contents = await file.read()
+
+    try:
+        if filename.endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(contents))
+        elif filename.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(io.BytesIO(contents))
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Please upload a .csv or .xlsx file.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read file: {e}")
+
+    if df.empty:
+        raise HTTPException(status_code=400, detail="Uploaded file has no rows.")
+
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    missing_cols = [c for c in REQUIRED_LISTING_COLUMNS if c not in df.columns]
+    if missing_cols:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required column(s): {', '.join(missing_cols)}",
+        )
+
+    valid_rows = []
+    row_errors = []
+    for i, row in df.iterrows():
+        # +2 accounts for the header row and 0-indexing, so this matches the
+        # row number the uploader would see if they opened the file themselves.
+        cleaned, error = validate_property_row(row.to_dict(), row_num=i + 2)
+        if error:
+            row_errors.append(error)
+        else:
+            valid_rows.append(cleaned)
+
+    inserted = 0
+    if valid_rows:
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            for r in valid_rows:
+                cursor.execute(
+                    """
+                    INSERT INTO property_data (prop_type, purpose, covered_area, price, location, beds, baths, amenities)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        r["prop_type"],
+                        r["purpose"],
+                        r["covered_area"],
+                        r["price"],
+                        r["location"],
+                        r["beds"],
+                        r["baths"],
+                        r["amenities"],
+                    ),
+                )
+                inserted += 1
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=500, detail=f"Database error during insert: {e}")
+        cursor.close()
+        conn.close()
+
+    return {
+        "success": True,
+        "rows_received": int(len(df)),
+        "rows_inserted": inserted,
+        "rows_failed": len(row_errors),
+        "errors": row_errors,
+    }

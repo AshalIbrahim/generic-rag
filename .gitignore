@@ -34,6 +34,4 @@ Thumbs.db
 
 prometheus-grafana/
 backend/model_cache/ 
-backend/chroma_joined_index/
-chroma_joined_index/
 model_cache/

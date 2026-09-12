@@ -11,6 +11,17 @@ import {
   CircularProgress,
   Fade,
   Slide,
+  ToggleButtonGroup,
+  ToggleButton,
+  List,
+  ListItem,
+  ListItemText,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  TableContainer,
 } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
@@ -34,6 +45,12 @@ export default function AddListing() {
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
   const [error, setError] = useState('')
+
+  const [mode, setMode] = useState('single') // 'single' or 'bulk'
+  const [bulkFile, setBulkFile] = useState(null)
+  const [bulkUploading, setBulkUploading] = useState(false)
+  const [bulkResult, setBulkResult] = useState(null)
+  const [bulkError, setBulkError] = useState('')
 
   useEffect(() => {
     fetchOptions()
@@ -92,6 +109,60 @@ export default function AddListing() {
     }
   }
 
+  const handleModeChange = (e, newMode) => {
+    if (newMode === null) return
+    setMode(newMode)
+    setError('')
+    setSuccess(false)
+    setBulkError('')
+    setBulkResult(null)
+  }
+
+  const handleDownloadTemplate = () => {
+    const header = 'prop_type,purpose,covered_area,price,location,beds,baths,amenities'
+    const example = 'House,For Sale,2200,450000,"Austin, Texas",4,3,"Garage,Backyard,Central AC"'
+    const csvContent = `${header}\n${example}\n`
+    const blob = new Blob([csvContent], { type: 'text/csv' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'listings_template.csv'
+    link.click()
+    window.URL.revokeObjectURL(url)
+  }
+
+  const handleBulkFileChange = (e) => {
+    const selected = e.target.files?.[0] || null
+    setBulkFile(selected)
+    setBulkResult(null)
+    setBulkError('')
+  }
+
+  const handleBulkUpload = async (e) => {
+    e.preventDefault()
+    if (!bulkFile) {
+      setBulkError('Please choose a .csv or .xlsx file first.')
+      return
+    }
+    setBulkUploading(true)
+    setBulkError('')
+    setBulkResult(null)
+
+    const payload = new FormData()
+    payload.append('file', bulkFile)
+
+    try {
+      const response = await axios.post(`${API}/listings/bulk-upload`, payload, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setBulkResult(response.data)
+    } catch (err) {
+      setBulkError(err.response?.data?.detail || 'Failed to upload file. Please try again.')
+    } finally {
+      setBulkUploading(false)
+    }
+  }
+
   return (
     <Container maxWidth="md" sx={{ mt: 4, mb: 6 }}>
       <Fade in timeout={600}>
@@ -120,6 +191,27 @@ export default function AddListing() {
             </Typography>
           </Slide>
 
+          <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>
+            <ToggleButtonGroup
+              value={mode}
+              exclusive
+              onChange={handleModeChange}
+              size="small"
+              sx={{
+                '& .MuiToggleButton-root.Mui-selected': {
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: '#fff',
+                  '&:hover': {
+                    background: 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)',
+                  },
+                },
+              }}
+            >
+              <ToggleButton value="single">Single Listing</ToggleButton>
+              <ToggleButton value="bulk">Bulk Upload</ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+
           {success && (
             <Fade in timeout={400}>
               <Alert severity="success" sx={{ mb: 3 }}>
@@ -136,6 +228,7 @@ export default function AddListing() {
             </Fade>
           )}
 
+          {mode === 'single' && (
           <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
               <TextField
@@ -295,6 +388,139 @@ export default function AddListing() {
               </Button>
             </Box>
           </Box>
+          )}
+
+          {mode === 'bulk' && (
+          <Box component="form" onSubmit={handleBulkUpload} sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+              Your file needs a header row with these exact column names. Columns are matched
+              case-insensitively; amenities is optional, everything else is required.
+            </Typography>
+
+            <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow sx={{ '& th': { fontWeight: 700, background: 'rgba(102, 126, 234, 0.08)' } }}>
+                    <TableCell>prop_type</TableCell>
+                    <TableCell>purpose</TableCell>
+                    <TableCell>covered_area</TableCell>
+                    <TableCell>price</TableCell>
+                    <TableCell>location</TableCell>
+                    <TableCell>beds</TableCell>
+                    <TableCell>baths</TableCell>
+                    <TableCell>amenities</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  <TableRow>
+                    <TableCell>House</TableCell>
+                    <TableCell>For Sale</TableCell>
+                    <TableCell>2200</TableCell>
+                    <TableCell>450000</TableCell>
+                    <TableCell>Austin, Texas</TableCell>
+                    <TableCell>4</TableCell>
+                    <TableCell>3</TableCell>
+                    <TableCell>Garage, Backyard</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </TableContainer>
+
+            <Button
+              variant="text"
+              onClick={handleDownloadTemplate}
+              sx={{ alignSelf: 'flex-start', color: '#667eea', textTransform: 'none', fontWeight: 600 }}
+            >
+              Download blank template (.csv)
+            </Button>
+
+            <Button
+              variant="outlined"
+              component="label"
+              sx={{
+                borderColor: '#667eea',
+                color: '#667eea',
+                alignSelf: 'flex-start',
+                '&:hover': {
+                  borderColor: '#764ba2',
+                  background: 'rgba(102, 126, 234, 0.08)',
+                },
+              }}
+            >
+              {bulkFile ? bulkFile.name : 'Choose File'}
+              <input
+                type="file"
+                hidden
+                accept=".csv,.xlsx,.xls"
+                onChange={handleBulkFileChange}
+              />
+            </Button>
+
+            {bulkError && (
+              <Fade in timeout={400}>
+                <Alert severity="error">{bulkError}</Alert>
+              </Fade>
+            )}
+
+            {bulkResult && (
+              <Fade in timeout={400}>
+                <Alert severity={bulkResult.rows_failed > 0 ? 'warning' : 'success'}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {bulkResult.rows_inserted} of {bulkResult.rows_received} rows added
+                    {bulkResult.rows_failed > 0 ? `, ${bulkResult.rows_failed} failed` : ''}.
+                  </Typography>
+                  {bulkResult.errors && bulkResult.errors.length > 0 && (
+                    <List dense sx={{ maxHeight: 200, overflowY: 'auto', mt: 1 }}>
+                      {bulkResult.errors.map((err, idx) => (
+                        <ListItem key={idx} sx={{ py: 0 }}>
+                          <ListItemText primaryTypographyProps={{ variant: 'caption' }} primary={err} />
+                        </ListItem>
+                      ))}
+                    </List>
+                  )}
+                </Alert>
+              </Fade>
+            )}
+
+            <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end', mt: 2 }}>
+              <Button
+                variant="outlined"
+                onClick={() => navigate('/')}
+                sx={{
+                  borderColor: '#667eea',
+                  color: '#667eea',
+                  '&:hover': {
+                    borderColor: '#764ba2',
+                    background: 'rgba(102, 126, 234, 0.08)',
+                  },
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="contained"
+                disabled={bulkUploading || !bulkFile}
+                sx={{
+                  minWidth: 120,
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+                  '&:hover': {
+                    background: 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)',
+                    boxShadow: '0 6px 20px rgba(102, 126, 234, 0.5)',
+                    transform: 'translateY(-2px)',
+                  },
+                  '&:disabled': {
+                    background: '#ccc',
+                  },
+                  transition: 'all 0.3s ease',
+                }}
+              >
+                {bulkUploading ? <CircularProgress size={24} color="inherit" /> : 'Upload File'}
+              </Button>
+            </Box>
+          </Box>
+          )}
         </Paper>
       </Fade>
     </Container>
