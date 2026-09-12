@@ -32,6 +32,10 @@ Thumbs.db
 # Temporary or cache folders
 .cache/
 
+# Generated vector DB / Chroma indexes
+backend/chroma_joined_index/
+rag/chroma_joined_index/
+
 prometheus-grafana/
 backend/model_cache/ 
 model_cache/
