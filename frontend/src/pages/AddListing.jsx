@@ -52,6 +52,8 @@ export default function AddListing() {
   const [bulkResult, setBulkResult] = useState(null)
   const [bulkError, setBulkError] = useState('')
 
+  const [singleImages, setSingleImages] = useState([])
+
   useEffect(() => {
     fetchOptions()
   }, [])
@@ -78,6 +80,10 @@ export default function AddListing() {
     setError('')
   }
 
+  const handleSingleImagesChange = (e) => {
+    setSingleImages(Array.from(e.target.files || []))
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
@@ -97,6 +103,21 @@ export default function AddListing() {
       })
 
       if (response.data.success) {
+        const newId = response.data.id
+        if (newId && singleImages.length > 0) {
+          const imagePayload = new FormData()
+          singleImages.forEach((img) => imagePayload.append('files', img))
+          try {
+            await axios.post(`${API}/listings/${newId}/images`, imagePayload, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            })
+          } catch (imgErr) {
+            // Listing was created successfully even if image upload failed —
+            // surface it, but don't block the success flow below.
+            console.error('Image upload failed:', imgErr)
+            setError('Listing added, but image upload failed. You can add images from the listing details page.')
+          }
+        }
         setSuccess(true)
         setTimeout(() => {
           navigate('/')
@@ -349,6 +370,29 @@ export default function AddListing() {
               rows={3}
               placeholder="e.g., Swimming pool, Gym, Parking, Security..."
             />
+
+            <Button
+              variant="outlined"
+              component="label"
+              sx={{
+                borderColor: '#667eea',
+                color: '#667eea',
+                alignSelf: 'flex-start',
+                '&:hover': {
+                  borderColor: '#764ba2',
+                  background: 'rgba(102, 126, 234, 0.08)',
+                },
+              }}
+            >
+              {singleImages.length > 0 ? `${singleImages.length} image(s) selected` : 'Add Images (optional)'}
+              <input
+                type="file"
+                hidden
+                multiple
+                accept="image/*"
+                onChange={handleSingleImagesChange}
+              />
+            </Button>
 
             <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end', mt: 2 }}>
               <Button

@@ -6,6 +6,7 @@ from typing import List
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import io
+import uuid  # ADDED: used to generate unique filenames for uploaded property images
 import mysql.connector
 import pandas as pd
 import json
@@ -94,6 +95,31 @@ s3 = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=AWS_DEFAULT_REGION,
 )
+
+
+# ==================== ADDED: property image storage (Supabase, S3-compatible) ====================
+# Uses the same boto3 client pattern as the AWS block above, just pointed at Supabase's
+# S3-compatible storage endpoint with its own separate credentials. Nothing above this
+# block was changed.
+SUPABASE_S3_ENDPOINT = os.getenv("SUPABASE_S3_ENDPOINT")  # e.g. https://<ref>.storage.supabase.co/storage/v1/s3
+SUPABASE_S3_REGION = os.getenv("SUPABASE_S3_REGION", "ap-northeast-1")
+SUPABASE_S3_ACCESS_KEY = os.getenv("SUPABASE_S3_ACCESS_KEY")
+SUPABASE_S3_SECRET_KEY = os.getenv("SUPABASE_S3_SECRET_KEY")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "property-images")
+SUPABASE_PROJECT_REF = os.getenv("SUPABASE_PROJECT_REF")  # e.g. btkxcyhmggjzdokqgmuv
+
+supabase_s3 = boto3.client(
+    "s3",
+    endpoint_url=SUPABASE_S3_ENDPOINT,
+    aws_access_key_id=SUPABASE_S3_ACCESS_KEY,
+    aws_secret_access_key=SUPABASE_S3_SECRET_KEY,
+    region_name=SUPABASE_S3_REGION,
+)
+
+
+def supabase_public_url(storage_path: str) -> str:
+    return f"https://{SUPABASE_PROJECT_REF}.supabase.co/storage/v1/object/public/{SUPABASE_BUCKET}/{storage_path}"
+# ==================== END ADDED: property image storage ====================
 
 
 
@@ -353,10 +379,36 @@ def get_listings(
 
     cursor.execute(query, tuple(params))
     data = cursor.fetchall()
+
+    # ==================== ADDED: attach one thumbnail image per card ====================
+    # Picks the primary image if one is set, otherwise the first uploaded image.
+    # No image uploaded -> thumbnail_url is None, so the frontend can render the
+    # card without an image slot at all.
+    if data:
+        ids = [row["id"] for row in data]
+        placeholders = ",".join(["%s"] * len(ids))
+        cursor.execute(
+            f"""
+            SELECT id, property_id, storage_path, is_primary
+            FROM property_images
+            WHERE property_id IN ({placeholders})
+            ORDER BY property_id, is_primary DESC, id ASC
+            """,
+            tuple(ids),
+        )
+        image_rows = cursor.fetchall()
+        thumbnail_by_property = {}
+        for img in image_rows:
+            pid = img["property_id"]
+            if pid not in thumbnail_by_property:  # first row per property_id wins (primary, else earliest)
+                thumbnail_by_property[pid] = supabase_public_url(img["storage_path"])
+        for row in data:
+            row["thumbnail_url"] = thumbnail_by_property.get(row["id"])
+    # ==================== END ADDED ====================
+
     cursor.close()
     conn.close()
     return data
-
 
 @app.get("/listings/{listing_id}")
 def get_listing_by_id(listing_id: int):
@@ -430,6 +482,33 @@ def get_listing_by_id(listing_id: int):
     row["purpose"] = row.get("purpose") or "N/A"
     row["location"] = row.get("location") or "N/A"
     row["amenities"] = row.get("amenities") or "N/A"
+
+    # ==================== ADDED: attach uploaded images to the listing response ====================
+    img_cursor = None
+    try:
+        conn3 = get_connection()
+        img_cursor = conn3.cursor(dictionary=True)
+        img_cursor.execute(
+            "SELECT id, storage_path, is_primary FROM property_images WHERE property_id = %s ORDER BY is_primary DESC, id ASC",
+            (listing_id,),
+        )
+        image_rows = img_cursor.fetchall()
+        row["images"] = [
+            {
+                "id": r["id"],
+                "url": supabase_public_url(r["storage_path"]),
+                "is_primary": bool(r["is_primary"]),
+            }
+            for r in image_rows
+        ]
+    except Exception:
+        row["images"] = []
+    finally:
+        if img_cursor:
+            img_cursor.close()
+            conn3.close()
+    # ==================== END ADDED ====================
+
     return row
 
 
@@ -1195,10 +1274,116 @@ def add_listing(body: AddListingRequest):
         )
     )
     conn.commit()
+    new_id = cursor.lastrowid   # <-- ADDED: grab the new row's id before the cursor closes
     cursor.close()
     conn.close()
 
-    return {"success": True, "message": "Listing added successfully."}
+    return {"success": True, "message": "Listing added successfully.","id": new_id}
+
+# ==================== ADDED: edit listing endpoint (for the frontend Edit button) ====================
+@app.put("/listings/{listing_id}")
+def update_listing(listing_id: int, body: AddListingRequest):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM property_data WHERE id = %s", (listing_id,))
+    if not cursor.fetchone():
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    cursor.execute(
+        """
+        UPDATE property_data
+        SET prop_type = %s, purpose = %s, covered_area = %s, price = %s,
+            location = %s, beds = %s, baths = %s, amenities = %s
+        WHERE id = %s
+        """,
+        (
+            body.prop_type,
+            body.purpose,
+            body.covered_area,
+            body.price,
+            body.location,
+            body.beds,
+            body.baths,
+            body.amenities,
+            listing_id,
+        ),
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"success": True, "message": "Listing updated successfully."}
+# ==================== END ADDED ====================
+
+
+# ==================== ADDED: property image upload/delete endpoints ====================
+@app.post("/listings/{listing_id}/images")
+async def upload_property_images(listing_id: int, files: List[UploadFile] = File(...)):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM property_data WHERE id = %s", (listing_id,))
+    if not cursor.fetchone():
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    uploaded = []
+    failed = []
+    for f in files:
+        try:
+            contents = await f.read()
+            ext = os.path.splitext(f.filename or "")[1] or ".jpg"
+            storage_path = f"{listing_id}/{uuid.uuid4().hex}{ext}"
+            supabase_s3.put_object(
+                Bucket=SUPABASE_BUCKET,
+                Key=storage_path,
+                Body=contents,
+                ContentType=f.content_type or "image/jpeg",
+            )
+            cursor.execute(
+                "INSERT INTO property_images (property_id, storage_path) VALUES (%s, %s)",
+                (listing_id, storage_path),
+            )
+            conn.commit()
+            uploaded.append({
+                "id": cursor.lastrowid,
+                "url": supabase_public_url(storage_path),
+            })
+        except Exception as e:
+            failed.append({"filename": f.filename, "error": str(e)})
+
+    cursor.close()
+    conn.close()
+    return {"success": True, "uploaded": uploaded, "failed": failed}
+
+
+@app.delete("/listings/{listing_id}/images/{image_id}")
+def delete_property_image(listing_id: int, image_id: int):
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT storage_path FROM property_images WHERE id = %s AND property_id = %s",
+        (image_id, listing_id),
+    )
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    try:
+        supabase_s3.delete_object(Bucket=SUPABASE_BUCKET, Key=row["storage_path"])
+    except Exception:
+        pass  # storage cleanup is best-effort; still remove the DB row below
+
+    cursor.execute("DELETE FROM property_images WHERE id = %s", (image_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"success": True}
+# ==================== END ADDED ====================
+
 
     # ---- Bulk property upload ----
 REQUIRED_LISTING_COLUMNS = ["prop_type", "purpose", "covered_area", "price", "location", "beds", "baths"]

@@ -120,6 +120,16 @@ export default function Listings({ filterLocation }){
           <Grid item xs={12} md={6} lg={4} key={i}>
             <Card className="property-card" sx={{ borderRadius: 3, boxShadow: 3, overflow: 'hidden', background: 'linear-gradient(135deg, rgba(20,184,166,0.08), rgba(245,158,11,0.06))' }}>
               <CardActionArea component={RouterLink} to={`/property/${l.id}`}>
+              {l.thumbnail_url && (
+                <Box sx={{ p: 1.5, pb: 0 }}>
+                  <Box
+                    component="img"
+                    src={l.thumbnail_url}
+                    alt={l.prop_type || 'Property'}
+                    sx={{ width: '100%', height: 160, objectFit: 'cover', display: 'block', borderRadius: 2 }}
+                  />
+                </Box>
+              )}
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent:'space-between', alignItems:'center', mb:1 }}>
                   <Typography variant="h6" sx={{ fontWeight:700 }}>
