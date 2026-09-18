@@ -5,8 +5,22 @@ import Typography from '@mui/material/Typography'
 import Button from '@mui/material/Button'
 import { Link as RouterLink } from 'react-router-dom'
 import Link from '@mui/material/Link'
+import { useAuth } from '../context/AuthContext'
 
 export default function NavBar(){
+  const { account, signOut } = useAuth()
+  const navItems = [
+    ['Dashboard', '/'],
+    ['Listings', '/listings'],
+    ['Leads', '/leads'],
+    ['Sales', '/sales'],
+    ['Follow-ups', '/follow-ups'],
+    ['Conversations', '/conversations'],
+    ['Team', '/team'],
+    ['Audit', '/audit'],
+    ['Chatbot', '/chatbot'],
+  ]
+
   return (
     <AppBar 
       position="static"
@@ -18,59 +32,39 @@ export default function NavBar(){
     >
       <Toolbar>
         <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 700 }}>
-          Zameen
+          {account?.tenant_name || 'Zameen'}
         </Typography>
-        <Link component={RouterLink} to="/" color="inherit" underline="none">
-          <Button 
-            color="inherit"
-            sx={{
-              '&:hover': {
-                background: 'rgba(255, 255, 255, 0.16)',
-                transform: 'translateY(-1px)',
-              },
-              transition: 'all .2s ease',
-            }}
-          >
-            Listings
-          </Button>
-        </Link>
-        <Link component={RouterLink} to="/locations" color="inherit" underline="none">
-          <Button 
-            color="inherit"
-            sx={{
-              '&:hover': {
-                background: 'rgba(255, 255, 255, 0.1)',
-              },
-            }}
-          >
-            Locations
-          </Button>
-        </Link>
-        
+        {navItems.map(([label, path]) => (
+          <Link key={path} component={RouterLink} to={path} color="inherit" underline="none">
+            <Button
+              color="inherit"
+              size="small"
+              sx={{
+                '&:hover': {
+                  background: 'rgba(255, 255, 255, 0.16)',
+                  transform: 'translateY(-1px)',
+                },
+                transition: 'all .2s ease',
+              }}
+            >
+              {label}
+            </Button>
+          </Link>
+        ))}
         <Link component={RouterLink} to="/add-listing" color="inherit" underline="none">
-  <Button 
-    color="inherit"
-    sx={{
-      '&:hover': {
-        background: 'rgba(255, 255, 255, 0.1)',
-      },
-    }}
-  >
-    Add Listing
-  </Button>
-</Link>
-        <Link component={RouterLink} to="/chatbot" color="inherit" underline="none">
-          <Button 
+          <Button
             color="inherit"
+            size="small"
             sx={{
               '&:hover': {
                 background: 'rgba(255, 255, 255, 0.1)',
               },
             }}
           >
-            Chatbot
+            Add Listing
           </Button>
         </Link>
+        <Button color="inherit" size="small" onClick={signOut}>Sign out</Button>
       </Toolbar>
     </AppBar>
   )

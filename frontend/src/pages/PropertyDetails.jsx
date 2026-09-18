@@ -13,8 +13,7 @@ import {
   IconButton,
   Dialog,
 } from "@mui/material";
-
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+import { api } from "../lib/api";
 
 export default function PropertyDetails() {
   const { id } = useParams();
@@ -44,14 +43,10 @@ export default function PropertyDetails() {
     try {
       setLoading(true);
       setError("");
-      const resp = await fetch(`${API}/listings/${id}`);
-      if (!resp.ok) {
-        throw new Error("Property not found");
-      }
-      const data = await resp.json();
-      setProperty(data);
+      const resp = await api.get(`/properties/${id}`);
+      setProperty(resp.data);
     } catch (e) {
-      setError(e.message || "Failed to load property");
+      setError(e.response?.data?.detail || e.message || "Failed to load property");
     } finally {
       setLoading(false);
     }
@@ -98,10 +93,7 @@ export default function PropertyDetails() {
     setSaving(true);
     setSaveError("");
     try {
-      const resp = await fetch(`${API}/listings/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await api.put(`/properties/${id}`, {
           prop_type: editForm.prop_type,
           purpose: editForm.purpose,
           covered_area: parseFloat(editForm.covered_area),
@@ -110,17 +102,12 @@ export default function PropertyDetails() {
           beds: parseInt(editForm.beds, 10),
           baths: parseInt(editForm.baths, 10),
           amenities: editForm.amenities || "",
-        }),
       });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || "Failed to save changes");
-      }
       await fetchProperty();
       setEditMode(false);
       setEditForm(null);
     } catch (e) {
-      setSaveError(e.message || "Failed to save changes");
+      setSaveError(e.response?.data?.detail || e.message || "Failed to save changes");
     } finally {
       setSaving(false);
     }
@@ -140,22 +127,17 @@ export default function PropertyDetails() {
     newImages.forEach((file) => payload.append("files", file));
 
     try {
-      const resp = await fetch(`${API}/listings/${id}/images`, {
-        method: "POST",
-        body: payload,
+      const resp = await api.post(`/properties/${id}/images`, payload, {
+        headers: { "Content-Type": "multipart/form-data" },
       });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || "Failed to upload images");
-      }
-      const data = await resp.json();
+      const data = resp.data;
       if (data.failed && data.failed.length > 0) {
         setImageError(`${data.failed.length} image(s) failed to upload.`);
       }
       setNewImages([]);
       await fetchProperty();
     } catch (e) {
-      setImageError(e.message || "Failed to upload images");
+      setImageError(e.response?.data?.detail || e.message || "Failed to upload images");
     } finally {
       setUploadingImages(false);
     }
@@ -165,16 +147,10 @@ export default function PropertyDetails() {
     setDeletingImageId(imageId);
     setImageError("");
     try {
-      const resp = await fetch(`${API}/listings/${id}/images/${imageId}`, {
-        method: "DELETE",
-      });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || "Failed to delete image");
-      }
+      await api.delete(`/properties/${id}/images/${imageId}`);
       await fetchProperty();
     } catch (e) {
-      setImageError(e.message || "Failed to delete image");
+      setImageError(e.response?.data?.detail || e.message || "Failed to delete image");
     } finally {
       setDeletingImageId(null);
     }

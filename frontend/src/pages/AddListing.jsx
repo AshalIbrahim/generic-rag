@@ -25,6 +25,7 @@ import {
 } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { api } from '../lib/api'
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
@@ -91,7 +92,7 @@ export default function AddListing() {
     setSuccess(false)
 
     try {
-      const response = await axios.post(`${API}/listings/add`, {
+      const response = await api.post('/properties', {
         prop_type: formData.prop_type,
         purpose: formData.purpose,
         covered_area: parseFloat(formData.covered_area),
@@ -102,27 +103,24 @@ export default function AddListing() {
         amenities: formData.amenities || '',
       })
 
-      if (response.data.success) {
-        const newId = response.data.id
-        if (newId && singleImages.length > 0) {
-          const imagePayload = new FormData()
-          singleImages.forEach((img) => imagePayload.append('files', img))
-          try {
-            await axios.post(`${API}/listings/${newId}/images`, imagePayload, {
-              headers: { 'Content-Type': 'multipart/form-data' },
-            })
-          } catch (imgErr) {
-            // Listing was created successfully even if image upload failed —
-            // surface it, but don't block the success flow below.
-            console.error('Image upload failed:', imgErr)
-            setError('Listing added, but image upload failed. You can add images from the listing details page.')
-          }
+      const newId = response.data.id
+      if (newId && singleImages.length > 0) {
+        const imagePayload = new FormData()
+        singleImages.forEach((img) => imagePayload.append('files', img))
+        try {
+          await api.post(`/properties/${newId}/images`, imagePayload, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          })
+        } catch (imgErr) {
+          // Listing was created successfully even if image upload failed.
+          console.error('Image upload failed:', imgErr)
+          setError('Listing added, but image upload failed. You can add images from the listing details page.')
         }
-        setSuccess(true)
-        setTimeout(() => {
-          navigate('/')
-        }, 2000)
       }
+      setSuccess(true)
+      setTimeout(() => {
+        navigate('/')
+      }, 2000)
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to add listing. Please try again.')
     } finally {

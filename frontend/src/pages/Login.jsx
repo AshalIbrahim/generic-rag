@@ -10,11 +10,10 @@ import IconButton from '@mui/material/IconButton'
 import Divider from '@mui/material/Divider'
 import Alert from '@mui/material/Alert'
 import CircularProgress from '@mui/material/CircularProgress'
+import { useAuth } from '../context/AuthContext'
 
-console.log('API URL:', import.meta.env.VITE_API_URL)
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
-
-export default function Login({ onLoginSuccess }) {
+export default function Login() {
+  const { signIn } = useAuth()
   const [form, setForm] = useState({ email: '', password: '' })
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -32,23 +31,12 @@ export default function Login({ onLoginSuccess }) {
       return
     }
     try {
-      console.log('Inside login function')
       setLoading(true)
       setError('')
-      const resp = await fetch(API + '/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: form.email, password: form.password }),
-      })
-      const data = await resp.json()
-      if (!resp.ok) {
-        setError(data.detail || 'Invalid email or password.')
-        return
-      }
-      if (onLoginSuccess) onLoginSuccess(data)
+      await signIn(form.email, form.password)
     } catch (err) {
       console.error('login', err)
-      setError('Unable to connect. Please try again.')
+      setError(err.message || 'Unable to connect. Please try again.')
     } finally {
       setLoading(false)
     }

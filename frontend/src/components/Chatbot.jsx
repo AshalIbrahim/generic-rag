@@ -13,8 +13,6 @@ import {
   Fab,
   CircularProgress,
 } from "@mui/material";
-import ChatIcon from "@mui/icons-material/Chat";
-import CloseIcon from "@mui/icons-material/Close";
 import { Link as RouterLink } from "react-router-dom";
 
 const STORAGE_KEY = "zameen_chat_history_v2";
@@ -315,7 +313,7 @@ export default function Chatbot({ fullPage = false }) {
           <Box sx={{ px: 2, py: 1.5, display: "flex", alignItems: "center", background: 'linear-gradient(90deg, #0f766e, #14b8a6, #0ea5a3)' }}>
             <Typography sx={{ flex: 1, color: "white", fontWeight: 600 }}>Zameen Assistant</Typography>
             <IconButton size="small" onClick={() => setOpen(false)}>
-              <CloseIcon sx={{ color: "white" }} />
+              <Typography sx={{ color: "white", fontWeight: 800, lineHeight: 1 }}>x</Typography>
             </IconButton>
           </Box>
 
@@ -439,7 +437,7 @@ export default function Chatbot({ fullPage = false }) {
           }} 
           onClick={() => setOpen((o) => !o)}
         >
-          <ChatIcon />
+          <Typography sx={{ color: "white", fontWeight: 800 }}>Chat</Typography>
         </Fab>
       )}
     </Box>

@@ -1540,3 +1540,13 @@ async def bulk_upload_listings(file: UploadFile = File(...)):
         "rows_failed": len(row_errors),
         "errors": row_errors,
     }
+
+
+# ---- New multi-tenant CRM/public platform API ----
+# The existing routes above stay available while the platform UI is migrated.
+try:
+    from platform_routes import register_platform_routes
+except ImportError:
+    from .platform_routes import register_platform_routes
+
+register_platform_routes(app, chat_handler=generate_chat_response)
