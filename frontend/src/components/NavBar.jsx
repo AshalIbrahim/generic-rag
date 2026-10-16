@@ -71,6 +71,18 @@ export default function NavBar(){
             Chatbot
           </Button>
         </Link>
+           <Link component={RouterLink} to="/add-agent" color="inherit" underline="none">
+          <Button 
+            color="inherit"
+            sx={{
+              '&:hover': {
+                background: 'rgba(255, 255, 255, 0.1)',
+              },
+            }}
+          >
+            Add Agents
+          </Button>
+        </Link>
       </Toolbar>
     </AppBar>
   )

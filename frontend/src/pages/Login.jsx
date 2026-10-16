@@ -45,6 +45,11 @@ export default function Login({ onLoginSuccess }) {
         setError(data.detail || 'Invalid email or password.')
         return
       }
+      if (!data.token) {
+        setError('Login succeeded without an access token. Please contact support.')
+        return
+      }
+      localStorage.setItem('token', data.token)
       if (onLoginSuccess) onLoginSuccess(data)
     } catch (err) {
       console.error('login', err)

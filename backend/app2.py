@@ -19,6 +19,9 @@ import zipfile
 import numpy as np
 import re
 from datetime import datetime
+import jwt  # ADDED: PyJWT, used for login tokens (python -m pip install pyjwt)
+from datetime import timedelta  # ADDED
+from fastapi import Depends, Header  # ADDED
 from huggingface_hub import InferenceClient
 from pathlib import Path
 
@@ -371,7 +374,7 @@ def login(body: LoginRequest):
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # POSTGRES MIGRATION: users -> accounts, upassword -> password_hash (bcrypt)
-    cursor.execute("SELECT * FROM accounts WHERE email = %s", (body.email,))
+    cursor.execute("SELECT * FROM accounts WHERE email = %s", (body.email.strip().lower(),))  # CHANGED: emails are stored lowercase
     user = cursor.fetchone()
 
     if not user or not bcrypt.checkpw(body.password.encode("utf-8"), user["password_hash"].encode("utf-8")):
@@ -390,6 +393,9 @@ def login(body: LoginRequest):
     return {
         "id": user["id"],
         "email": user["email"],
+        "role": user["role"],                       # ADDED
+        "tenant_id": user["tenant_id"],             # ADDED
+        "token": create_access_token(user["id"]),   # ADDED
     }
 
 
@@ -1346,6 +1352,151 @@ class AddListingRequest(BaseModel):
     beds: int
     baths: int
     amenities: str = ''
+
+
+# ==================== ADDED: token auth + add-agent endpoint ====================
+JWT_SECRET = os.getenv("JWT_SECRET")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_HOURS = 12
+
+
+def create_access_token(account_id: int) -> str:
+    # Only the account id goes into the token. Role and tenant are re-read from
+    # the database on every request, so a token can never claim a role.
+    payload = {
+        "sub": str(account_id),
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def get_current_account(authorization: str | None = Header(default=None)):
+    """Dependency: reads 'Authorization: Bearer <token>', returns the caller's
+    account row (id, tenant_id, email, role) or raises 401."""
+    if not JWT_SECRET:
+        raise HTTPException(status_code=500, detail="JWT_SECRET is not configured on the server.")
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Not logged in.")
+
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        account_id = int(payload["sub"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+    except (jwt.InvalidTokenError, KeyError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid token.")
+
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute(
+        "SELECT id, tenant_id, email, role FROM accounts WHERE id = %s",
+        (account_id,),
+    )
+    account = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not account:
+        raise HTTPException(status_code=401, detail="Account no longer exists.")
+    return account
+
+
+# Who can create what. Roles not listed here (agent) can't create anything.
+CREATABLE_ROLES = {
+    "sysadmin": {"sysadmin", "owner", "agent"},
+    "owner": {"owner", "agent"},
+}
+ALL_ROLES = {"sysadmin", "owner", "agent"}
+
+
+def resolve_new_account_tenant(caller: dict, new_role: str, requested_tenant_id):
+    """Decide which tenant the new account is created under.
+    The owner's tenant always comes from their own account, never the request."""
+    if caller["role"] == "owner":
+        if requested_tenant_id is not None and requested_tenant_id != caller["tenant_id"]:
+            raise HTTPException(status_code=403, detail="Owners can only add accounts to their own agency.")
+        return caller["tenant_id"]
+
+    # sysadmin
+    if new_role == "sysadmin":
+        return caller["tenant_id"]  # new sysadmins live in the devTeam tenant
+    if requested_tenant_id is None:
+        raise HTTPException(status_code=400, detail="tenant_id is required when a sysadmin creates an owner or agent.")
+    return requested_tenant_id
+
+
+class AddAgentRequest(BaseModel):
+    email: str
+    password: str
+    role: str = "agent"
+    name: str | None = None
+    phone: str | None = None
+    tenant_id: int | None = None  # only used by sysadmin
+
+
+@app.get("/auth/me")
+def auth_me(caller: dict = Depends(get_current_account)):
+    return {
+        "id": caller["id"],
+        "email": caller["email"],
+        "role": caller["role"],
+        "tenant_id": caller["tenant_id"],
+    }
+
+
+@app.post("/agents/add")
+def add_agent(body: AddAgentRequest, caller: dict = Depends(get_current_account)):
+    allowed_roles = CREATABLE_ROLES.get(caller["role"])
+    if not allowed_roles:
+        raise HTTPException(status_code=403, detail="You don't have permission to add accounts.")
+
+    new_role = body.role.strip().lower()
+    if new_role not in ALL_ROLES:
+        raise HTTPException(status_code=400, detail="Role must be sysadmin, owner or agent.")
+    if new_role not in allowed_roles:
+        raise HTTPException(status_code=403, detail=f"Your role can't create '{new_role}' accounts.")
+
+    email = body.email.strip().lower()
+    if "@" not in email or len(email) < 5:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if len(body.password.encode("utf-8")) > 72:  # bcrypt's hard limit
+        raise HTTPException(status_code=400, detail="Password is too long (max 72 bytes).")
+
+    tenant_id = resolve_new_account_tenant(caller, new_role, body.tenant_id)
+    password_hash = bcrypt.hashpw(body.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute("SELECT id FROM tenants WHERE id = %s", (tenant_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Tenant not found.")
+
+        cursor.execute(
+            """
+            INSERT INTO accounts (tenant_id, email, password_hash, role, name, phone)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id, tenant_id, email, role, name
+            """,
+            (tenant_id, email, password_hash, new_role, body.name, body.phone),
+        )
+        created = cursor.fetchone()
+        conn.commit()
+    except psycopg2.IntegrityError as e:
+        conn.rollback()
+        if getattr(e, "pgcode", None) == "23505":  # unique violation
+            raise HTTPException(status_code=409, detail="An account with this email already exists.")
+        raise HTTPException(status_code=400, detail="Could not create the account (it conflicts with a database rule).")
+    finally:
+        cursor.close()
+        conn.close()
+
+    # password_hash is never returned
+    return {"success": True, "account": created}
+# ==================== END ADDED ====================
 
 
 @app.post("/listings/add")

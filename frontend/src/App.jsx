@@ -36,6 +36,7 @@ import Locations from './pages/Locations'
 import ChatBotPage from './pages/ChatBotPage'
 //import CompareProperties from './pages/CompareProperties'
 import AddListing from './pages/AddListing'
+import AddAgent from './pages/AddAgent'
 import Login from './pages/Login'
 import PropertyDetails from './pages/PropertyDetails'
 
@@ -56,6 +57,7 @@ export default function App(){
           <Route path="/" element={<Listings filterLocation={filterLocation} />} />
           <Route path="/locations" element={<Locations onSelectLocation={setFilterLocation} />} />
           <Route path="/chatbot" element={<ChatBotPage />} />
+          <Route path="/add-agent" element={<AddAgent />} />
           {/* <Route path="/compare" element={<CompareProperties />} /> */}
           <Route path="/add-listing" element={<AddListing />} />
           <Route path="*" element={<Navigate to="/" replace />} />
