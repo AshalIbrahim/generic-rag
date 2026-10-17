@@ -15,10 +15,14 @@ import {
 } from "@mui/material";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+import { authHeaders } from "../auth"; // ADDED: JWT for edit / image calls
 
 export default function PropertyDetails() {
   const { id } = useParams();
   const [property, setProperty] = useState(null);
+  // ==== ADDED: who owns this listing and may the logged-in user edit it? ====
+  const [perm, setPerm] = useState({ can_edit: false, listed_by: null, is_mine: false });
+  // ==== END ADDED ====
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -50,6 +54,15 @@ export default function PropertyDetails() {
       }
       const data = await resp.json();
       setProperty(data);
+      // ==== ADDED: ask the server whether this user can edit (everyone can view) ====
+      try {
+        const pr = await fetch(`${API}/listings/${id}/permissions`, { headers: authHeaders() });
+        if (pr.ok) setPerm(await pr.json());
+        else setPerm({ can_edit: false, listed_by: null, is_mine: false });
+      } catch {
+        setPerm({ can_edit: false, listed_by: null, is_mine: false });
+      }
+      // ==== END ADDED ====
     } catch (e) {
       setError(e.message || "Failed to load property");
     } finally {
@@ -100,7 +113,7 @@ export default function PropertyDetails() {
     try {
       const resp = await fetch(`${API}/listings/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }), // CHANGED: sends the login token
         body: JSON.stringify({
           prop_type: editForm.prop_type,
           purpose: editForm.purpose,
@@ -142,6 +155,7 @@ export default function PropertyDetails() {
     try {
       const resp = await fetch(`${API}/listings/${id}/images`, {
         method: "POST",
+        headers: authHeaders(), // CHANGED: sends the login token (no Content-Type: the browser sets the multipart boundary)
         body: payload,
       });
       if (!resp.ok) {
@@ -167,6 +181,7 @@ export default function PropertyDetails() {
     try {
       const resp = await fetch(`${API}/listings/${id}/images/${imageId}`, {
         method: "DELETE",
+        headers: authHeaders(), // CHANGED: sends the login token
       });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
@@ -199,12 +214,33 @@ export default function PropertyDetails() {
           <Typography variant="h5" sx={{ fontWeight: 700 }}>
             Property #{property.id}
           </Typography>
-          {!editMode && (
+          {!editMode && perm.can_edit && ( /* CHANGED: Edit only for the listing's owner */
             <Button variant="outlined" onClick={startEdit}>
               Edit
             </Button>
           )}
         </Box>
+
+        {/* ==== ADDED: show who listed it, and why Edit may be missing ==== */}
+        <Box sx={{ mb: 2, display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+          <Chip
+            size="small"
+            color={perm.is_mine ? "success" : "default"}
+            label={
+              perm.listed_by
+                ? perm.is_mine
+                  ? "Listed by you"
+                  : `Listed by ${perm.listed_by.name || perm.listed_by.email}`
+                : "Listed by: agency (no agent assigned)"
+            }
+          />
+          {!perm.can_edit && (
+            <Typography variant="caption" color="text.secondary">
+              View only — only the agent who listed this property can edit it.
+            </Typography>
+          )}
+        </Box>
+        {/* ==== END ADDED ==== */}
 
         {saveError && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -291,6 +327,7 @@ export default function PropertyDetails() {
                       cursor: "zoom-in",
                     }}
                   />
+                  {perm.can_edit && ( /* CHANGED: delete (×) only for the listing's owner */
                   <IconButton
                     size="small"
                     onClick={() => handleDeleteImage(img.id)}
@@ -310,6 +347,7 @@ export default function PropertyDetails() {
                       <Typography sx={{ fontSize: 14, lineHeight: 1, px: 0.5 }}>×</Typography>
                     )}
                   </IconButton>
+                  )}
                 </Box>
               ))}
             </Box>
@@ -317,6 +355,7 @@ export default function PropertyDetails() {
             <Typography sx={{ color: "text.secondary", mb: 2 }}>No images uploaded yet.</Typography>
           )}
 
+          {perm.can_edit && ( /* CHANGED: photo upload only for the listing's owner */
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
             <Button variant="outlined" component="label">
               {newImages.length > 0 ? `${newImages.length} image(s) selected` : "Choose Images"}
@@ -330,6 +369,7 @@ export default function PropertyDetails() {
               {uploadingImages ? <CircularProgress size={20} color="inherit" /> : "Upload"}
             </Button>
           </Box>
+          )}
         </Box>
       </CardContent>
 

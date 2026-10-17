@@ -24,6 +24,10 @@ from datetime import timedelta  # ADDED
 from fastapi import Depends, Header  # ADDED
 from huggingface_hub import InferenceClient
 from pathlib import Path
+# ==== ADDED: pure helpers + CRM/sales router (see commissions.py, permissions.py, crm_routes.py) ====
+from commissions import normalize_purpose
+from permissions import can_edit_listing
+# ==== END ADDED ====
 
 
 
@@ -58,7 +62,7 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "eu-north-1")
 S3_BUCKET = os.getenv("S3_BUCKET", "zameen-project")
 S3_MODELS_PREFIX = os.getenv("S3_MODELS_PREFIX", "zameen_models")
-S3_KEY = "chroma_joined_index.zip"
+# S3_KEY = "chroma_joined_index.zip"
 APP_DIR = Path(__file__).resolve().parent
 LOCAL_ZIP = str(APP_DIR / "chroma_joined_index_cloud.zip")
 LOCAL_INDEX_PATH = str(APP_DIR / "chroma_joined_index")
@@ -77,7 +81,9 @@ app = FastAPI(title="Zameen MLOps API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://robin-overtake-discover.ngrok-free.dev"
+        "https://robin-overtake-discover.ngrok-free.dev",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -93,13 +99,13 @@ HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "420"))
 
 
 
-# Initialize S3 client (will use env creds)
-s3 = boto3.client(
-    "s3",
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    region_name=AWS_DEFAULT_REGION,
-)
+# # Initialize S3 client (will use env creds)
+# s3 = boto3.client(
+#     "s3",
+#     aws_access_key_id=AWS_ACCESS_KEY_ID,
+#     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+#     region_name=AWS_DEFAULT_REGION,
+# )
 
 
 # ==================== ADDED: property image storage (Supabase, S3-compatible) ====================
@@ -139,8 +145,8 @@ def downloadindex():
         collections = chroma_client.get_collection("zameen_joined_index")
         return
     print("Downloading Chroma index from S3...")
-    s3 = boto3.client("s3")
-    s3.download_file(S3_BUCKET, S3_KEY, LOCAL_ZIP)
+    # s3 = boto3.client("s3")
+    # s3.download_file(S3_BUCKET, S3_KEY, LOCAL_ZIP)
     print("Extracting zip...")
     with zipfile.ZipFile(LOCAL_ZIP, "r") as z:
         for member in z.infolist():
@@ -275,28 +281,28 @@ def load_model(model_name="ZameenPriceModelSale"):
         os.makedirs("model_cache", exist_ok=True)
 
         # Download entire model folder
-        paginator = s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(
-            Bucket=S3_BUCKET, Prefix=f"{S3_MODELS_PREFIX}/{model_name}"
-        ):
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                rel_path = os.path.relpath(key, f"{S3_MODELS_PREFIX}/{model_name}")
-                local_path = os.path.join("model_cache", model_name, rel_path)
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                s3.download_file(S3_BUCKET, key, local_path)
+        # paginator = s3.get_paginator("list_objects_v2")
+        # for page in paginator.paginate(
+        #     Bucket=S3_BUCKET, Prefix=f"{S3_MODELS_PREFIX}/{model_name}"
+        # ):
+        #     for obj in page.get("Contents", []):
+        #         key = obj["Key"]
+        #         rel_path = os.path.relpath(key, f"{S3_MODELS_PREFIX}/{model_name}")
+        #         local_path = os.path.join("model_cache", model_name, rel_path)
+        #         os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        #         s3.download_file(S3_BUCKET, key, local_path)
 
-        # Download metadata
-        s3.download_file(
-            S3_BUCKET,
-            f"{S3_MODELS_PREFIX}/feature_columns.json",
-            "model_cache/feature_columns.json",
-        )
-        s3.download_file(
-            S3_BUCKET,
-            f"{S3_MODELS_PREFIX}/valid_metadata.json",
-            "model_cache/valid_metadata.json",
-        )
+        # # Download metadata
+        # s3.download_file(
+        #     S3_BUCKET,
+        #     f"{S3_MODELS_PREFIX}/feature_columns.json",
+        #     "model_cache/feature_columns.json",
+        # )
+        # s3.download_file(
+        #     S3_BUCKET,
+        #     f"{S3_MODELS_PREFIX}/valid_metadata.json",
+        #     "model_cache/valid_metadata.json",
+        # )
 
         # Try to load with joblib or pickle
         import joblib
@@ -476,8 +482,9 @@ def get_listings(
         params.append(prop_type)
 
     if purpose:
+        # CHANGED: accept 'sale'/'rent' (what the filters send) as well as 'For Sale'/'For Rent' (what the data stores)
         query += " AND p.purpose = %s"
-        params.append(purpose)
+        params.append(normalize_purpose(purpose) or purpose)
 
     if min_price is not None:
         query += " AND p.price >= %s"
@@ -487,7 +494,7 @@ def get_listings(
         query += " AND p.price <= %s"
         params.append(max_price)
 
-    query += " LIMIT %s"
+    query += " ORDER BY p.id DESC LIMIT %s"  # CHANGED: stable order (newest first) instead of LIMIT alone
     params.append(limit)
 
     cursor.execute(query, tuple(params))
@@ -1500,7 +1507,14 @@ def add_agent(body: AddAgentRequest, caller: dict = Depends(get_current_account)
 
 
 @app.post("/listings/add")
-def add_listing(body: AddListingRequest):
+def add_listing(body: AddListingRequest, caller: dict = Depends(get_current_account)):  # CHANGED: login required
+    # ==== ADDED: listing ownership — the logged-in agent/owner becomes the owner of the listing ====
+    if caller["role"] not in ("agent", "owner"):
+        raise HTTPException(status_code=403, detail="Only agents and owners can add listings.")
+    purpose = normalize_purpose(body.purpose)
+    if purpose is None:
+        raise HTTPException(status_code=400, detail="purpose must be 'For Sale' or 'For Rent'.")
+    # ==== END ADDED ====
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -1514,14 +1528,15 @@ def add_listing(body: AddListingRequest):
         INSERT INTO property_data
             (tenant_id, agent_id, location_id, prop_type, purpose,
              covered_area, price, beds, baths, amenities_raw, status)
-        VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
         RETURNING id
         """,
         (
-            DEFAULT_TENANT_ID,
+            caller["tenant_id"],   # CHANGED: was DEFAULT_TENANT_ID
+            caller["id"],          # CHANGED: was NULL — the uploader owns the listing
             location_id,
             body.prop_type,
-            body.purpose,
+            purpose,               # CHANGED: normalized to 'For Sale' / 'For Rent'
             body.covered_area,
             body.price,
             body.beds,
@@ -1539,14 +1554,24 @@ def add_listing(body: AddListingRequest):
 
 # ==================== ADDED: edit listing endpoint (for the frontend Edit button) ====================
 @app.put("/listings/{listing_id}")
-def update_listing(listing_id: int, body: AddListingRequest):
+def update_listing(listing_id: int, body: AddListingRequest, caller: dict = Depends(get_current_account)):  # CHANGED: login required
+    purpose = normalize_purpose(body.purpose)  # ADDED
+    if purpose is None:
+        raise HTTPException(status_code=400, detail="purpose must be 'For Sale' or 'For Rent'.")
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM property_data WHERE id = %s", (listing_id,))
-    if not cursor.fetchone():
+    cursor.execute("SELECT id, tenant_id, agent_id FROM property_data WHERE id = %s", (listing_id,))  # CHANGED: also fetch owner
+    found = cursor.fetchone()
+    if not found:
         cursor.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Property not found")
+    # ==== ADDED: only the uploading agent (or their owner / a sysadmin) may edit ====
+    if not can_edit_listing(caller, found[1], found[2]):
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the agent who uploaded this listing can edit it.")
+    # ==== END ADDED ====
 
     # POSTGRES MIGRATION: resolve location_id, write amenities_raw, and
     # re-sync the normalized amenity tags so they stay consistent with
@@ -1562,7 +1587,7 @@ def update_listing(listing_id: int, body: AddListingRequest):
         """,
         (
             body.prop_type,
-            body.purpose,
+            purpose,  # CHANGED: normalized
             body.covered_area,
             body.price,
             location_id,
@@ -1582,14 +1607,21 @@ def update_listing(listing_id: int, body: AddListingRequest):
 
 # ==================== ADDED: property image upload/delete endpoints ====================
 @app.post("/listings/{listing_id}/images")
-async def upload_property_images(listing_id: int, files: List[UploadFile] = File(...)):
+async def upload_property_images(listing_id: int, files: List[UploadFile] = File(...), caller: dict = Depends(get_current_account)):  # CHANGED: login required
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cursor.execute("SELECT id FROM property_data WHERE id = %s", (listing_id,))
-    if not cursor.fetchone():
+    cursor.execute("SELECT id, tenant_id, agent_id FROM property_data WHERE id = %s", (listing_id,))  # CHANGED: also fetch owner
+    found = cursor.fetchone()
+    if not found:
         cursor.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Property not found")
+    # ==== ADDED: only the listing's owner may add photos ====
+    if not can_edit_listing(caller, found["tenant_id"], found["agent_id"]):
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the agent who uploaded this listing can change its photos.")
+    # ==== END ADDED ====
 
     uploaded = []
     failed = []
@@ -1623,9 +1655,17 @@ async def upload_property_images(listing_id: int, files: List[UploadFile] = File
 
 
 @app.delete("/listings/{listing_id}/images/{image_id}")
-def delete_property_image(listing_id: int, image_id: int):
+def delete_property_image(listing_id: int, image_id: int, caller: dict = Depends(get_current_account)):  # CHANGED: login required
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # ==== ADDED: only the listing's owner may delete photos ====
+    cursor.execute("SELECT tenant_id, agent_id FROM property_data WHERE id = %s", (listing_id,))
+    owner_row = cursor.fetchone()
+    if owner_row and not can_edit_listing(caller, owner_row["tenant_id"], owner_row["agent_id"]):
+        cursor.close()
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the agent who uploaded this listing can change its photos.")
+    # ==== END ADDED ====
     cursor.execute(
         "SELECT storage_path FROM property_images WHERE id = %s AND property_id = %s",
         (image_id, listing_id),
@@ -1668,9 +1708,16 @@ def validate_property_row(row: dict, row_num: int):
         errors.append("missing prop_type")
     cleaned["prop_type"] = prop_type
 
-    purpose = str(row.get("purpose", "")).strip()
-    if not purpose or purpose.lower() == "nan":
+    purpose_raw = str(row.get("purpose", "")).strip()
+    if not purpose_raw or purpose_raw.lower() == "nan":
         errors.append("missing purpose")
+        purpose = purpose_raw
+    else:
+        # CHANGED: normalize 'sale'/'For Sale'/'rent'... to the canonical value
+        purpose = normalize_purpose(purpose_raw)
+        if purpose is None:
+            errors.append("purpose must be 'For Sale' or 'For Rent'")
+            purpose = purpose_raw
     cleaned["purpose"] = purpose
 
     location = str(row.get("location", "")).strip()
@@ -1715,7 +1762,7 @@ def validate_property_row(row: dict, row_num: int):
 
 
 @app.post("/listings/bulk-upload")
-async def bulk_upload_listings(file: UploadFile = File(...)):
+async def bulk_upload_listings(file: UploadFile = File(...), caller: dict = Depends(get_current_account)):  # CHANGED: login required
     """Upload a CSV or XLSX file of properties and insert the valid rows.
 
     Expects a header row with (at least) these columns:
@@ -1725,6 +1772,10 @@ async def bulk_upload_listings(file: UploadFile = File(...)):
     Invalid rows are skipped individually (not an all-or-nothing batch) and
     reported back so the uploader knows exactly what failed and why.
     """
+    # ==== ADDED: only agents/owners upload; every row is owned by the uploader ====
+    if caller["role"] not in ("agent", "owner"):
+        raise HTTPException(status_code=403, detail="Only agents and owners can upload listings.")
+    # ==== END ADDED ====
     filename = (file.filename or "").lower()
     contents = await file.read()
 
@@ -1766,25 +1817,47 @@ async def bulk_upload_listings(file: UploadFile = File(...)):
             valid_rows.append(cleaned)
 
     inserted = 0
+    duplicates_skipped = 0  # ADDED
     if valid_rows:
         conn = get_connection()
         cursor = conn.cursor()
+        seen_in_file = set()  # ADDED: catches the same row twice inside one file
         try:
             for r in valid_rows:
                 # POSTGRES MIGRATION: same location/amenities handling as
                 # add_listing — resolve location_id, get the new id via
                 # RETURNING, then populate the normalized amenity tags.
                 location_id = get_or_create_location(cursor, r["location"])
+                # ==== ADDED: duplicate detection (same agency, location, type, purpose, size, price, beds, baths) ====
+                dup_key = (location_id, r["prop_type"].lower(), r["purpose"], r["covered_area"], r["price"], r["beds"], r["baths"])
+                cursor.execute(
+                    """
+                    SELECT 1 FROM property_data
+                    WHERE tenant_id = %s AND location_id IS NOT DISTINCT FROM %s
+                      AND LOWER(prop_type) = %s AND purpose = %s
+                      AND covered_area = %s AND price = %s AND beds = %s AND baths = %s
+                    LIMIT 1
+                    """,
+                    (caller["tenant_id"], location_id, dup_key[1], r["purpose"],
+                     r["covered_area"], r["price"], r["beds"], r["baths"]),
+                )
+                if dup_key in seen_in_file or cursor.fetchone():
+                    duplicates_skipped += 1
+                    row_errors.append(f"Skipped duplicate: {r['prop_type']} in {r['location']} at {r['price']:g}")
+                    continue
+                seen_in_file.add(dup_key)
+                # ==== END ADDED ====
                 cursor.execute(
                     """
                     INSERT INTO property_data
                         (tenant_id, agent_id, location_id, prop_type, purpose,
                          covered_area, price, beds, baths, amenities_raw, status)
-                    VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active')
                     RETURNING id
                     """,
                     (
-                        DEFAULT_TENANT_ID,
+                        caller["tenant_id"],   # CHANGED: was DEFAULT_TENANT_ID
+                        caller["id"],          # CHANGED: was NULL — uploader owns every row
                         location_id,
                         r["prop_type"],
                         r["purpose"],
@@ -1811,6 +1884,46 @@ async def bulk_upload_listings(file: UploadFile = File(...)):
         "success": True,
         "rows_received": int(len(df)),
         "rows_inserted": inserted,
-        "rows_failed": len(row_errors),
+        "rows_failed": len(row_errors) - duplicates_skipped,  # CHANGED: duplicates reported separately
+        "rows_duplicates_skipped": duplicates_skipped,        # ADDED
         "errors": row_errors,
     }
+
+# ==================== ADDED: who owns a listing / can the caller edit it ====================
+@app.get("/listings/{listing_id}/permissions")
+def listing_permissions(listing_id: int, caller: dict = Depends(get_current_account)):
+    """Used by the frontend to decide whether to show Edit / photo controls.
+    Everyone can VIEW every listing; only the uploading agent (plus their owner
+    and sysadmins) can edit."""
+    conn = get_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute(
+        """
+        SELECT p.tenant_id, p.agent_id, a.name AS agent_name, a.email AS agent_email
+        FROM property_data p
+        LEFT JOIN accounts a ON a.id = p.agent_id
+        WHERE p.id = %s
+        """,
+        (listing_id,),
+    )
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return {
+        "can_edit": can_edit_listing(caller, row["tenant_id"], row["agent_id"]),
+        "listed_by": {
+            "agent_id": row["agent_id"],
+            "name": row["agent_name"],
+            "email": row["agent_email"],
+        } if row["agent_id"] else None,
+        "is_mine": row["agent_id"] == caller["id"],
+    }
+# ==================== END ADDED ====================
+
+
+# ==================== ADDED: sales, commissions, leads, follow-ups, agent performance ====================
+from crm_routes import build_router  # noqa: E402  (imported last: needs get_connection / get_current_account above)
+app.include_router(build_router(get_connection, get_current_account))
+# ==================== END ADDED ====================

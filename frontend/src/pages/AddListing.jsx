@@ -25,6 +25,7 @@ import {
 } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { authHeaders } from '../auth' // ADDED: JWT for add / upload calls
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
@@ -100,7 +101,7 @@ export default function AddListing() {
         beds: parseInt(formData.beds, 10),
         baths: parseInt(formData.baths, 10),
         amenities: formData.amenities || '',
-      })
+      }, { headers: authHeaders() }) // CHANGED: sends the login token
 
       if (response.data.success) {
         const newId = response.data.id
@@ -109,7 +110,7 @@ export default function AddListing() {
           singleImages.forEach((img) => imagePayload.append('files', img))
           try {
             await axios.post(`${API}/listings/${newId}/images`, imagePayload, {
-              headers: { 'Content-Type': 'multipart/form-data' },
+              headers: authHeaders({ 'Content-Type': 'multipart/form-data' }), // CHANGED
             })
           } catch (imgErr) {
             // Listing was created successfully even if image upload failed —
@@ -174,7 +175,7 @@ export default function AddListing() {
 
     try {
       const response = await axios.post(`${API}/listings/bulk-upload`, payload, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: authHeaders({ 'Content-Type': 'multipart/form-data' }), // CHANGED
       })
       setBulkResult(response.data)
     } catch (err) {
@@ -511,7 +512,8 @@ export default function AddListing() {
                 <Alert severity={bulkResult.rows_failed > 0 ? 'warning' : 'success'}>
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                     {bulkResult.rows_inserted} of {bulkResult.rows_received} rows added
-                    {bulkResult.rows_failed > 0 ? `, ${bulkResult.rows_failed} failed` : ''}.
+                    {bulkResult.rows_failed > 0 ? `, ${bulkResult.rows_failed} failed` : ''}
+                    {bulkResult.rows_duplicates_skipped > 0 ? `, ${bulkResult.rows_duplicates_skipped} duplicate(s) skipped` : ''}.
                   </Typography>
                   {bulkResult.errors && bulkResult.errors.length > 0 && (
                     <List dense sx={{ maxHeight: 200, overflowY: 'auto', mt: 1 }}>

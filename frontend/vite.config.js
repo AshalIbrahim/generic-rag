@@ -6,6 +6,6 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    allowedHosts: ['robin-overtake-discover.ngrok-free.dev']
+    allowedHosts: true
   }
 })

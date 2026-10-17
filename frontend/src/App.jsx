@@ -39,6 +39,11 @@ import AddListing from './pages/AddListing'
 import AddAgent from './pages/AddAgent'
 import Login from './pages/Login'
 import PropertyDetails from './pages/PropertyDetails'
+// ==== ADDED: sales/commissions, leads/follow-ups, performance pages ====
+import Sales from './pages/Sales'
+import Leads from './pages/Leads'
+import Performance from './pages/Performance'
+// ==== END ADDED ====
 
 
 export default function App(){
@@ -58,6 +63,11 @@ export default function App(){
           <Route path="/locations" element={<Locations onSelectLocation={setFilterLocation} />} />
           <Route path="/chatbot" element={<ChatBotPage />} />
           <Route path="/add-agent" element={<AddAgent />} />
+          {/* ==== ADDED ==== */}
+          <Route path="/sales" element={<Sales />} />
+          <Route path="/leads" element={<Leads />} />
+          <Route path="/performance" element={<Performance />} />
+          {/* ==== END ADDED ==== */}
           {/* <Route path="/compare" element={<CompareProperties />} /> */}
           <Route path="/add-listing" element={<AddListing />} />
           <Route path="*" element={<Navigate to="/" replace />} />

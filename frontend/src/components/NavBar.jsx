@@ -71,6 +71,19 @@ export default function NavBar(){
             Chatbot
           </Button>
         </Link>
+        {/* ==== ADDED: CRM links ==== */}
+        {[
+          ['/leads', 'Leads'],
+          ['/sales', 'Sales'],
+          ['/performance', 'Performance'],
+        ].map(([to, label]) => (
+          <Link key={to} component={RouterLink} to={to} color="inherit" underline="none">
+            <Button color="inherit" sx={{ '&:hover': { background: 'rgba(255, 255, 255, 0.1)' } }}>
+              {label}
+            </Button>
+          </Link>
+        ))}
+        {/* ==== END ADDED ==== */}
            <Link component={RouterLink} to="/add-agent" color="inherit" underline="none">
           <Button 
             color="inherit"

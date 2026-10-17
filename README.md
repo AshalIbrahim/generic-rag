@@ -65,7 +65,7 @@ Run backend (FastAPI)
 ```bash
 # from repo root
 cd backend
-uvicorn app:app --reload
+uvicorn app2:app --reload
 # or run the lightweight test server: python testingRag.py (starts on port 8005)
 ```
 
