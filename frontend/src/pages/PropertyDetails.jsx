@@ -48,7 +48,7 @@ export default function PropertyDetails() {
     try {
       setLoading(true);
       setError("");
-      const resp = await fetch(`${API}/listings/${id}`);
+      const resp = await fetch(`${API}/listings/${id}`, { headers: authHeaders() }); // CHANGED: listing details now need the token
       if (!resp.ok) {
         throw new Error("Property not found");
       }

@@ -8,6 +8,7 @@ import Chip from '@mui/material/Chip'
 import CardActionArea from '@mui/material/CardActionArea'
 import { Link as RouterLink } from 'react-router-dom'
 import Filters from '../components/Filters'
+import { authHeaders } from '../auth' // ADDED: sends the login token
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
@@ -67,9 +68,9 @@ export default function Listings({ filterLocation }){
         url.searchParams.set('max_price', filters.maxPrice)
       }
 
-      const resp = await fetch(url.toString())
+      const resp = await fetch(url.toString(), { headers: authHeaders() }) // CHANGED: listings now need the token
       const data = await resp.json()
-      setListings(data || [])
+      setListings(Array.isArray(data) ? data : []) // CHANGED: a 401 or error body must not crash the page
     }catch(err){
       console.error('fetchListings', err)
     }finally{

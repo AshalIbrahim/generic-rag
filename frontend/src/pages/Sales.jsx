@@ -95,7 +95,7 @@ export default function Sales() {
       if (!listing) return setPreview(null)
       const price = form.sale_price !== '' ? form.sale_price : listing.price
       const q = new URLSearchParams({ price, purpose: listing.purpose })
-      if (form.commission_rate_pct !== '') q.set('rate_pct', form.commission_rate_pct)
+      if (isOwner && form.commission_rate_pct !== '') q.set('rate_pct', form.commission_rate_pct)  // CHANGED: only the owner can override
       try {
         setPreview(await api(`/commissions/calculate?${q.toString()}`))
       } catch {
@@ -103,7 +103,7 @@ export default function Sales() {
       }
     }
     calc()
-  }, [listing, form.sale_price, form.commission_rate_pct])
+  }, [listing, form.sale_price, form.commission_rate_pct, isOwner])
 
   const change = (e) => {
     setForm((p) => ({ ...p, [e.target.name]: e.target.value }))
@@ -119,7 +119,7 @@ export default function Sales() {
     try {
       const body = { property_id: parseInt(form.property_id, 10), notes: form.notes || null }
       if (form.sale_price !== '') body.sale_price = parseFloat(form.sale_price)
-      if (form.commission_rate_pct !== '') body.commission_rate_pct = parseFloat(form.commission_rate_pct)
+      if (isOwner && form.commission_rate_pct !== '') body.commission_rate_pct = parseFloat(form.commission_rate_pct)  // CHANGED
       if (form.lead_id !== '') body.lead_id = parseInt(form.lead_id, 10)
       const res = await api('/sales', { method: 'POST', body })
       setNotice(`Deal recorded. Agent commission: ${formatPKR(res.commission.agent_commission)}.`)
@@ -216,8 +216,16 @@ export default function Sales() {
                 onChange={change} fullWidth helperText="Leave blank to use the listing price (monthly rent for rentals)" />
             </Grid>
             <Grid item xs={12} sm={4}>
-              <TextField label="Commission rate % (optional)" name="commission_rate_pct" type="number" value={form.commission_rate_pct}
-                onChange={change} fullWidth helperText={settings ? `Agency default: ${settings.sale_rate_pct}% sale / ${settings.rent_rate_pct}% of a month's rent` : 'Blank = agency default'} />
+              {/* CHANGED: filled from the agency's saved rate once the property is known; only the owner can change it */}
+              {isOwner ? (
+                <TextField label="Commission rate %" name="commission_rate_pct" type="number"
+                  value={form.commission_rate_pct !== '' ? form.commission_rate_pct : (preview ? preview.rate_pct : '')}
+                  onChange={change} fullWidth
+                  helperText={settings ? `Agency default: ${settings.sale_rate_pct}% sale / ${settings.rent_rate_pct}% of a month's rent. Edit only to change this one deal.` : 'Filled from your agency settings'} />
+              ) : (
+                <TextField label="Commission rate %" type="number" value={preview ? preview.rate_pct : ''}
+                  fullWidth disabled helperText="Set by your agency owner" />
+              )}
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField select label="Buyer / tenant lead (optional)" name="lead_id" value={form.lead_id} onChange={change} fullWidth

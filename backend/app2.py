@@ -440,6 +440,25 @@ def home():
     return {"message": "Zameen API is running"}
 
 
+# ==================== ADDED: agency-private listings ====================
+def _caller(authorization: str | None = Header(default=None)):
+    # get_current_account is defined later in this file; it is looked up per request, so no NameError
+    return get_current_account(authorization)
+
+
+def ensure_listing_visible(listing_id: int, caller: dict):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM property_data WHERE id = %s AND tenant_id = %s",
+                (listing_id, caller["tenant_id"]))
+    ok = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not ok:
+        raise HTTPException(status_code=404, detail="Property not found")
+# ==================== END ADDED ====================
+
+
 @app.get("/listings")
 def get_listings(
     limit: int = 20,
@@ -448,6 +467,7 @@ def get_listings(
     purpose: str | None = None,  # "sale" or "rent"
     min_price: float | None = None,
     max_price: float | None = None,
+    caller: dict = Depends(_caller),  # ADDED
 ):
     """
     Return property listings with optional filtering applied in the database.
@@ -472,6 +492,9 @@ def get_listings(
         WHERE 1=1
     """
     params: list = []
+    # ADDED: only this agency's listings
+    query += " AND p.tenant_id = %s"
+    params.append(caller["tenant_id"])
 
     if location:
         query += " AND l.raw_text = %s"
@@ -531,7 +554,8 @@ def get_listings(
     return data
 
 @app.get("/listings/{listing_id}")
-def get_listing_by_id(listing_id: int):
+def get_listing_by_id(listing_id: int, caller: dict = Depends(_caller)):  # CHANGED
+    ensure_listing_visible(listing_id, caller)  # ADDED
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     # POSTGRES MIGRATION: sentiment join is now an exact location_id match —

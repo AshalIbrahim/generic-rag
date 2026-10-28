@@ -147,6 +147,7 @@ def build_router(get_connection, get_current_account) -> APIRouter:
     # ================================================================ COMMISSIONS
     @router.get("/commissions/settings")
     def get_commission_settings(tenant_id: Optional[int] = None, caller: dict = Depends(get_current_account)):
+        need_role(caller, "owner", "sysadmin")  # ADDED: agents can't read the commission settings
         tid = scope_tenant(caller, tenant_id) or caller["tenant_id"]
         with db() as (conn, cur):
             return {"tenant_id": tid, **tenant_settings(cur, tid)}
@@ -252,6 +253,9 @@ def build_router(get_connection, get_current_account) -> APIRouter:
     def record_sale(body: SaleCreate, caller: dict = Depends(get_current_account)):
         """Record a closed sale/rental and calculate its commission."""
         need_role(caller, "agent", "owner")
+        # ADDED: the commission rate comes from the agency settings; only the owner may change it for a deal
+        if caller["role"] == "agent" and body.commission_rate_pct is not None:
+            raise HTTPException(status_code=403, detail="Only the owner can change the commission rate.")
         with db() as (conn, cur):
             cur.execute(
                 "SELECT id, tenant_id, agent_id, price, purpose FROM property_data WHERE id = %s FOR UPDATE",
