@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography'
 import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
 import CardActionArea from '@mui/material/CardActionArea'
+import Pagination from '@mui/material/Pagination' // ADDED: page buttons
 import { Link as RouterLink } from 'react-router-dom'
 import Filters from '../components/Filters'
 import { authHeaders } from '../auth' // ADDED: sends the login token
@@ -15,6 +16,8 @@ const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 export default function Listings({ filterLocation }){
   const [listings, setListings] = useState([])
   const [limit] = useState(20)
+  const [page, setPage] = useState(1) // ADDED
+  const [total, setTotal] = useState(0) // ADDED: how many listings match in total
   const [locations, setLocations] = useState([])
   const [selectedLocation, setSelectedLocation] = useState(filterLocation || '')
   const [filters, setFilters] = useState({
@@ -32,7 +35,7 @@ export default function Listings({ filterLocation }){
 
   useEffect(()=>{
     fetchListings()
-  },[limit, selectedLocation])
+  },[limit, selectedLocation, page]) // CHANGED: reload when the page changes
 
   useEffect(()=>{
     if(filterLocation){
@@ -45,6 +48,7 @@ export default function Listings({ filterLocation }){
       setLoading(true)
       const url = new URL(API + '/listings')
       url.searchParams.set('limit', limit)
+      url.searchParams.set('offset', (page - 1) * limit) // ADDED
 
       // Use selected location from Locations page if set
       if(selectedLocation){
@@ -71,6 +75,7 @@ export default function Listings({ filterLocation }){
       const resp = await fetch(url.toString(), { headers: authHeaders() }) // CHANGED: listings now need the token
       const data = await resp.json()
       setListings(Array.isArray(data) ? data : []) // CHANGED: a 401 or error body must not crash the page
+      setTotal(resp.ok ? parseInt(resp.headers.get('X-Total-Count') || '0', 10) : 0) // ADDED
     }catch(err){
       console.error('fetchListings', err)
     }finally{
@@ -89,8 +94,10 @@ export default function Listings({ filterLocation }){
   }
 
   function handleApplyFilters(){
-    fetchListings()
+    if(page !== 1){ setPage(1) } else { fetchListings() } // CHANGED: a new search starts at page 1
   }
+
+  const totalPages = Math.max(1, Math.ceil(total / limit)) // ADDED
 
   function formatPrice(p){
     if(p===undefined || p===null) return 'N/A'
@@ -165,6 +172,19 @@ export default function Listings({ filterLocation }){
           </Grid>
         ))}
       </Grid>
+      {/* ADDED: page buttons (1 2 3 ... 66) */}
+      {totalPages > 1 && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4, mb: 2 }}>
+          <Pagination
+            count={totalPages}
+            page={page}
+            onChange={(e, value) => { setPage(value); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+            color="primary"
+            showFirstButton
+            showLastButton
+          />
+        </Box>
+      )}
     </div>
   )
 }

@@ -22,6 +22,9 @@ from datetime import datetime
 import jwt  # ADDED: PyJWT, used for login tokens (python -m pip install pyjwt)
 from datetime import timedelta  # ADDED
 from fastapi import Depends, Header  # ADDED
+from fastapi import Response  # ADDED: lets get_listings send the total count
+import time, threading  # ADDED: connection pool
+from psycopg2 import pool as pg_pool  # ADDED: connection pool
 from huggingface_hub import InferenceClient
 from pathlib import Path
 # ==== ADDED: pure helpers + CRM/sales router (see commissions.py, permissions.py, crm_routes.py) ====
@@ -177,7 +180,7 @@ embmodel = SentenceTransformer("all-MiniLM-L6-v2")
 # MySQL. Add these 5 new variables to your .env (not previously needed):
 #   SUPABASE_PG_HOST, SUPABASE_PG_PORT, SUPABASE_PG_USER,
 #   SUPABASE_PG_PASSWORD, SUPABASE_PG_DATABASE
-def get_connection():
+def get_connection_direct():  # CHANGED: the old get_connection, renamed and kept as the fallback
     return psycopg2.connect(
         host=os.getenv("SUPABASE_PG_HOST"),
         port=int(os.getenv("SUPABASE_PG_PORT", 5432)),
@@ -185,6 +188,92 @@ def get_connection():
         password=os.getenv("SUPABASE_PG_PASSWORD"),
         dbname=os.getenv("SUPABASE_PG_DATABASE", "postgres"),
     )
+
+
+# ==================== ADDED: reuse database connections (the main speed-up) ====================
+# Before: every request opened a brand-new connection to Supabase (several network round trips each),
+# and /listings opened two (one to check the login, one for the data). Now connections stay open and
+# are reused. Existing code keeps calling conn.close(): that now hands the connection back to the pool.
+_PG_KW = dict(
+    host=os.getenv("SUPABASE_PG_HOST"),
+    port=int(os.getenv("SUPABASE_PG_PORT", 5432)),
+    user=os.getenv("SUPABASE_PG_USER"),
+    password=os.getenv("SUPABASE_PG_PASSWORD"),
+    dbname=os.getenv("SUPABASE_PG_DATABASE", "postgres"),
+    keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+)
+_PING_AFTER_IDLE = 30  # seconds a pooled connection may sit idle before it is checked prior to reuse
+_pool = None
+_pool_lock = threading.Lock()
+_returned_at = {}
+
+
+class _PooledConn:
+    """Looks like a normal psycopg2 connection; close() returns it to the pool instead of closing it."""
+    def __init__(self, raw):
+        object.__setattr__(self, "_raw", raw)
+        object.__setattr__(self, "_done", False)
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._raw, name, value)
+
+    def __enter__(self):
+        self._raw.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._raw.__exit__(*exc)
+
+    def close(self):
+        if self._done:
+            return
+        object.__setattr__(self, "_done", True)
+        raw = self._raw
+        try:
+            if not raw.closed:
+                raw.rollback()  # drop any unfinished transaction, as closing a connection used to
+        except Exception:
+            pass
+        _returned_at[id(raw)] = time.time()
+        try:
+            _pool.putconn(raw, close=bool(raw.closed))
+        except Exception:
+            pass
+
+    def __del__(self):  # a path that forgot to close() must not leak the pooled connection
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def get_connection():
+    global _pool
+    try:
+        if _pool is None:
+            with _pool_lock:
+                if _pool is None:
+                    _pool = pg_pool.ThreadedConnectionPool(1, 10, **_PG_KW)
+        raw = _pool.getconn()
+    except Exception:
+        return get_connection_direct()  # pool unavailable or full: behave exactly like before
+    if time.time() - _returned_at.get(id(raw), 0) > _PING_AFTER_IDLE:
+        try:  # the server may have dropped a long-idle connection: check before handing it out
+            cur = raw.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+            raw.rollback()
+        except Exception:
+            try:
+                _pool.putconn(raw, close=True)
+            except Exception:
+                pass
+            return get_connection_direct()
+    return _PooledConn(raw)
+# ==================== END ADDED ====================
 
 
 # All existing data belongs to one agency for now — see the migration script/README
@@ -461,12 +550,14 @@ def ensure_listing_visible(listing_id: int, caller: dict):
 
 @app.get("/listings")
 def get_listings(
+    response: Response,  # ADDED: used to send the total count
     limit: int = 20,
     location: str | None = None,
     prop_type: str | None = None,
     purpose: str | None = None,  # "sale" or "rent"
     min_price: float | None = None,
     max_price: float | None = None,
+    offset: int = 0,  # ADDED: skip this many listings (page 2 of 20 = offset 20)
     caller: dict = Depends(_caller),  # ADDED
 ):
     """
@@ -486,7 +577,8 @@ def get_listings(
     # this response (frontend, filters below) needs zero changes.
     query = """
         SELECT p.id, p.prop_type, p.purpose, p.covered_area, p.price,
-               l.raw_text AS location, p.beds, p.baths, p.amenities_raw AS amenities
+               l.raw_text AS location, p.beds, p.baths, p.amenities_raw AS amenities,
+               COUNT(*) OVER() AS _total  -- ADDED: total matching rows, for the page buttons
         FROM property_data p
         LEFT JOIN locations l ON p.location_id = l.id
         WHERE 1=1
@@ -517,11 +609,19 @@ def get_listings(
         query += " AND p.price <= %s"
         params.append(max_price)
 
-    query += " ORDER BY p.id DESC LIMIT %s"  # CHANGED: stable order (newest first) instead of LIMIT alone
-    params.append(limit)
+    limit = max(1, min(limit, 100))  # ADDED: sensible paging bounds
+    offset = max(0, offset)
+    query += " ORDER BY p.id DESC LIMIT %s OFFSET %s"  # CHANGED: newest first, one page at a time
+    params.extend([limit, offset])
 
     cursor.execute(query, tuple(params))
     data = cursor.fetchall()
+    # ADDED: tell the frontend how many listings match in total (the response body stays a plain list)
+    total = data[0]["_total"] if data else 0
+    for row in data:
+        row.pop("_total", None)
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
 
     # ==================== ADDED: attach one thumbnail image per card ====================
     # Picks the primary image if one is set, otherwise the first uploaded image.
