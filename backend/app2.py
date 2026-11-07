@@ -1474,6 +1474,452 @@ def chat(req: ChatRequest):
         "properties": payload.get("properties", []),  # No cards - all info in text response
     }
 
+# ==================== ADDED: database-based chatbot (/chat-db) ====================
+# WHERE TO PASTE: in app2.py, directly after the existing `chat()` function
+# (the one decorated with @app.post("/chat")) and before `class AddListingRequest`.
+# Nothing existing is changed or removed. /chat keeps working exactly as before.
+#
+# What it does: same input/output shape as /chat, but listings come from Postgres
+# filters instead of the Chroma index. The model only turns the user's sentence into
+# filters (JSON). The code validates them, injects the agency from the login token,
+# and runs the SQL. A second model call then writes the reply from the real rows.
+#
+# Needs login: send  Authorization: Bearer <token>  (same token as /listings).
+
+CHATDB_DEFAULT_LIMIT = 5
+CHATDB_MAX_LIMIT = 20
+_CHATDB_SORTS = {  # whitelist: the model can only pick one of these, never write SQL
+    "newest": "p.id DESC",
+    "price_asc": "p.price ASC NULLS LAST, p.id DESC",
+    "price_desc": "p.price DESC NULLS LAST, p.id DESC",
+}
+
+
+def _chatdb_like(text: str) -> str:
+    # escape LIKE wildcards so "DHA_6%" is searched literally, then match "contains"
+    safe = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{safe}%"
+
+
+def _chatdb_num(value, as_int: bool = False):
+    try:
+        if value is None or value == "":
+            return None
+        n = float(value)
+        if n < 0:
+            return None
+        return int(n) if as_int else n
+    except (TypeError, ValueError):
+        return None
+
+
+def _chatdb_purpose_label(value):
+    # ADDED: show 'rent' / 'sale' rows as 'For Rent' / 'For Sale'
+    if not value:
+        return None
+    try:
+        return normalize_purpose(str(value)) or str(value)
+    except Exception:
+        return str(value)
+
+
+def _chatdb_clean_amenities(text):
+    # ADDED: drop line breaks, empty items and repeats ("Parking\r\nLawn,,,," -> "Parking, Lawn")
+    if not text:
+        return text
+    items = []
+    for part in re.split(r"[\r\n,]+", str(text)):
+        part = part.strip()
+        if part and part not in items:
+            items.append(part)
+    return ", ".join(items)
+
+
+def _chatdb_pkr(n) -> str:
+    return f"PKR {float(n):,.0f}"
+
+
+def _chatdb_clean_filters(raw: dict) -> dict:
+    """Validate whatever the model returned. Anything unexpected becomes None/default."""
+    f = {}
+    f["location"] = (str(raw.get("location") or "").strip()[:80]) or None
+    f["prop_type"] = (str(raw.get("prop_type") or "").strip()[:40]) or None
+    purpose = None
+    if raw.get("purpose"):
+        try:
+            purpose = normalize_purpose(str(raw["purpose"]))
+        except Exception:
+            purpose = None
+    f["purpose"] = purpose if purpose in ("For Sale", "For Rent") else None
+    f["min_price"] = _chatdb_num(raw.get("min_price"))
+    f["max_price"] = _chatdb_num(raw.get("max_price"))
+    if f["min_price"] is not None and f["max_price"] is not None and f["min_price"] > f["max_price"]:
+        f["min_price"], f["max_price"] = f["max_price"], f["min_price"]
+    f["beds"] = _chatdb_num(raw.get("beds"), as_int=True)
+    f["baths"] = _chatdb_num(raw.get("baths"), as_int=True)
+    limit = _chatdb_num(raw.get("limit"), as_int=True) or CHATDB_DEFAULT_LIMIT
+    f["limit"] = max(1, min(limit, CHATDB_MAX_LIMIT))
+    sort = str(raw.get("sort") or "newest").strip().lower()
+    f["sort"] = sort if sort in _CHATDB_SORTS else "newest"
+    return f
+
+
+def _chatdb_where(tenant_id, f: dict, skip_price: bool = False):
+    sql = " WHERE p.tenant_id = %s"  # agency comes from the token, never from the model
+    params: list = [tenant_id]
+    if f["location"]:
+        sql += " AND l.raw_text ILIKE %s"
+        params.append(_chatdb_like(f["location"]))
+    if f["prop_type"]:
+        sql += " AND p.prop_type ILIKE %s"
+        params.append(_chatdb_like(f["prop_type"]))
+    if f["purpose"]:
+        sql += " AND LOWER(TRIM(p.purpose)) IN (%s, %s)"  # CHANGED: also matches old rows saved as 'sale' / 'rent'
+        params.extend(["for sale", "sale"] if f["purpose"] == "For Sale" else ["for rent", "rent"])
+    if not skip_price:
+        if f["min_price"] is not None:
+            sql += " AND p.price >= %s"
+            params.append(f["min_price"])
+        if f["max_price"] is not None:
+            sql += " AND p.price <= %s"
+            params.append(f["max_price"])
+    if f["beds"] is not None:
+        sql += " AND p.beds = %s"
+        params.append(f["beds"])
+    if f["baths"] is not None:
+        sql += " AND p.baths = %s"
+        params.append(f["baths"])
+    return sql, params
+
+
+def _chatdb_tenant_options(tenant_id):
+    """This agency's real location names and property types, so the model picks real ones."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT l.raw_text, p.prop_type
+            FROM property_data p
+            LEFT JOIN locations l ON p.location_id = l.id
+            WHERE p.tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+    locs = sorted({r[0] for r in rows if r[0]})
+    types = sorted({r[1] for r in rows if r[1]})
+    return locs, types
+
+
+def _chatdb_search(tenant_id, f: dict):
+    """Returns (rows, total_matches, outside_price). outside_price is only set when
+    nothing matched but the price limit is the reason (so the reply can say what exists)."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        where, params = _chatdb_where(tenant_id, f)
+        cur.execute(
+            f"""
+            SELECT p.id, p.prop_type, p.purpose, p.covered_area, p.price,
+                   l.raw_text AS location, p.beds, p.baths, p.amenities_raw AS amenities,
+                   s.water_sentiment, s.electricity_sentiment, s.gas_sentiment,
+                   s.traffic_sentiment, s.safety_sentiment,
+                   COUNT(*) OVER() AS _total
+            FROM property_data p
+            LEFT JOIN locations l ON p.location_id = l.id
+            LEFT JOIN LATERAL (
+                SELECT * FROM location_sentiments WHERE location_id = p.location_id LIMIT 1
+            ) s ON TRUE
+            {where}
+            ORDER BY {_CHATDB_SORTS[f['sort']]}
+            LIMIT %s
+            """,
+            tuple(params + [f["limit"]]),
+        )
+        rows = cur.fetchall()
+        total = rows[0]["_total"] if rows else 0
+        for r in rows:
+            r.pop("_total", None)
+
+        outside_price = None
+        if total == 0 and (f["min_price"] is not None or f["max_price"] is not None):
+            where2, params2 = _chatdb_where(tenant_id, f, skip_price=True)
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS n, MIN(p.price) AS lo, MAX(p.price) AS hi
+                FROM property_data p
+                LEFT JOIN locations l ON p.location_id = l.id
+                {where2}
+                """,
+                tuple(params2),
+            )
+            agg = cur.fetchone()
+            if agg and agg["n"]:
+                outside_price = {"count": agg["n"], "lowest": agg["lo"], "highest": agg["hi"]}
+        cur.close()
+        return rows, total, outside_price
+    finally:
+        conn.close()
+
+
+def _chatdb_describe(f: dict, total: int, shown: int, outside_price) -> str:
+    """One plain sentence stating exactly what was searched and what was found."""
+    parts = []
+    if f["purpose"]:
+        parts.append(f["purpose"])
+    if f["prop_type"]:
+        parts.append(f["prop_type"])
+    if f["location"]:
+        parts.append(f"in {f['location']}")
+    if f["min_price"] is not None and f["max_price"] is not None:
+        parts.append(f"priced {_chatdb_pkr(f['min_price'])} to {_chatdb_pkr(f['max_price'])}")
+    elif f["max_price"] is not None:
+        parts.append(f"under {_chatdb_pkr(f['max_price'])}")
+    elif f["min_price"] is not None:
+        parts.append(f"above {_chatdb_pkr(f['min_price'])}")
+    if f["beds"] is not None:
+        parts.append(f"{f['beds']} beds")
+    if f["baths"] is not None:
+        parts.append(f"{f['baths']} baths")
+    what = ", ".join(parts) if parts else "all listings"
+    line = f"Searched: {what}; up to {f['limit']} results, sorted by {f['sort']}. "
+    line += f"Found {total} matching listing(s) in total; showing {shown}."
+    if total == 0 and outside_price:
+        line += (
+            f" Without the price limit there are {outside_price['count']} listing(s) for the other filters,"
+            f" priced from {_chatdb_pkr(outside_price['lowest'])} to {_chatdb_pkr(outside_price['highest'])}."
+        )
+    return line
+
+
+def _chatdb_cards(rows: list) -> list:
+    """Same card shape /chat returns, so the frontend needs no change."""
+    cards = []
+    for r in rows:
+        price = to_python_number(r.get("price"))
+        area = to_python_number(r.get("covered_area"))
+        ppa = (price / area) if price and area else None
+        cards.append(
+            {
+                "id": r["id"],
+                "detail_url": f"/property/{r['id']}",
+                "label": r.get("prop_type") or f"Property {r['id']}",
+                "location": r.get("location"),
+                "purpose": _chatdb_purpose_label(r.get("purpose")),  # CHANGED
+                "price": price,
+                "area": area,
+                "beds": r.get("beds"),
+                "baths": r.get("baths"),
+                "amenities": _chatdb_clean_amenities(r.get("amenities")),  # CHANGED
+                "price_per_area": to_python_number(ppa),
+                "score": None,
+                "snippet": "",
+            }
+        )
+    return cards
+
+
+def _chatdb_context(rows: list) -> str:
+    parts = []
+    for r in rows:
+        # CHANGED: purpose shown as For Sale / For Rent
+        bits = [f"Property ID: {r['id']}", str(_chatdb_purpose_label(r.get("purpose")) or "N/A"), str(r.get("prop_type") or "N/A"),
+                str(r.get("location") or "N/A")]
+        bits.append(_chatdb_pkr(r["price"]) if r.get("price") is not None else "Price: not available")
+        bits.append(f"Beds: {r['beds'] if r.get('beds') is not None else 'not available'}")
+        bits.append(f"Baths: {r['baths'] if r.get('baths') is not None else 'not available'}")
+        bits.append(f"Area: {r['covered_area'] if r.get('covered_area') is not None else 'not available'}")
+        line = " | ".join(bits)
+        if r.get("amenities"):
+            line += f"\nAmenities: {str(_chatdb_clean_amenities(r['amenities']))[:240]}"
+        senti = [f"{k.replace('_sentiment', '')}: {r[k]}" for k in
+                 ("water_sentiment", "electricity_sentiment", "gas_sentiment", "traffic_sentiment", "safety_sentiment")
+                 if r.get(k)]
+        if senti:
+            line += "\nLocation notes (reported): " + ", ".join(senti)
+        parts.append(line)
+    return "\n\n---\n\n".join(parts) if parts else "[No matching listings.]"
+
+
+def generate_chat_db_response(messages: List[ChatMessage], tenant_id) -> dict:
+    last_user = messages[-1].content
+    recent = messages[-6:]
+    history = "\n".join(
+        f"{'User' if m.role == 'user' else 'Assistant'}: {m.content[:220]}" for m in recent[:-1]
+    )
+    locs, types = _chatdb_tenant_options(tenant_id)
+
+    # ---- Step 1: one model call -> intent + filters (JSON only) ----
+    extract_prompt = f"""You turn a message from a Pakistan real estate platform into search filters.
+Return ONLY one JSON object and nothing else.
+
+{{"intent": "greeting | general_chat | property_search | pitch_request",
+ "location": "the place the user named, or null",
+ "prop_type": "the property type the user named, or null",
+ "purpose": "sale | rent | null",
+ "min_price": "number in PKR, or null",
+ "max_price": "number in PKR, or null",
+ "beds": "whole number, or null",
+ "baths": "whole number, or null",
+ "limit": "how many properties the user asked for, or null",
+ "sort": "newest | price_asc | price_desc"}}
+
+Intents:
+- greeting / general_chat: no listings needed (hello, thanks, general real estate question).
+- property_search: the user wants listings, a comparison, or a follow-up that needs fresh listings.
+- pitch_request: an agent wants talking points to pitch specific properties on a call.
+
+Rules:
+- Use null for anything the user did not say. Never guess sale or rent: if they did not say, use null.
+- If the user names a place, always return it, even when it is not in the agency's list below. Never return null for a place the user named. Use the list only to pick the right spelling or a shorter word that matches (for example "DHA" for "DHA Defence").
+- The same for property type: if the user names a type that is not in the list, return their word anyway. If it is in the list, use the list spelling.
+- Prices are PKR. 250k = 250000, 2 lakh = 200000, 1.5 crore = 15000000.
+- "under / below / up to X" means max_price. "above / over / at least X" means min_price.
+- "around X" means min_price = 0.8 * X and max_price = 1.2 * X.
+- "cheapest" means sort price_asc, "most expensive" means sort price_desc, otherwise newest.
+- If the user asks for N properties, set limit to N.
+- For follow-ups ("what about Clifton?"), keep earlier filters from the conversation unless the user changed them.
+
+The agency's locations: {", ".join(locs[:150]) or "none"}
+The agency's property types: {", ".join(types) or "none"}
+
+Conversation so far:
+{history or "(none)"}
+
+Current user message: "{last_user}"
+"""
+    raw_json = groq_generate(extract_prompt)
+    m = re.search(r"\{.*\}", raw_json, flags=re.DOTALL)
+    try:
+        raw = json.loads(m.group(0)) if m else {}
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception:
+        raw = {}
+    if not raw:
+        return {"text": "Sorry, I couldn't work out what to search for. Could you rephrase that?",
+                "properties": [], "search": None}
+
+    intent = str(raw.get("intent") or "property_search").strip().lower()
+    if intent not in ("greeting", "general_chat", "property_search", "pitch_request"):
+        intent = "property_search"
+
+    if intent in ("greeting", "general_chat"):
+        chat_prompt = f"""You are a friendly Pakistan real estate assistant named Zameen Assistant.
+The user is not asking about a specific property right now. Have a natural, warm conversation.
+
+Recent conversation:
+{history}
+
+User message: "{last_user}"
+
+Respond in 1-3 sentences. Do NOT list properties or use markdown headers.
+If the user greeted you, greet them back and say you can find properties, write pitches, or answer real estate questions."""
+        return {"text": groq_generate(chat_prompt).strip(), "properties": [],
+                "search": {"intent": intent, "filters": None}}
+
+    # ---- Step 2: validate filters, then run the SQL (tenant from the token) ----
+    f = _chatdb_clean_filters(raw)
+    rows, total, outside_price = _chatdb_search(tenant_id, f)
+    searched = _chatdb_describe(f, total, len(rows), outside_price)
+    cards = _chatdb_cards(rows)
+    comparison = build_comparison_insights(cards)
+    context = _chatdb_context(rows)
+
+    # ---- Step 3: second model call writes the reply from the real rows ----
+    if intent == "pitch_request":
+        main_prompt = f"""You are coaching an experienced, consultative real estate agent in Pakistan who is on a live call with a buyer right now. Generate quick-reference talking points the agent can glance at mid-call, not a written pitch for the buyer to read.
+
+{searched}
+
+Listings from the database:
+{context}
+
+Recent conversation:
+{history}
+
+User's request: "{last_user}"
+
+First work out what likely matters most to this buyer (budget, family size, location, investment vs living). Use it to choose what to surface; do not show it as a separate section.
+If there are several properties, put the strongest match first, give it the most space, and be honest about where weaker matches fall short.
+
+FORMAT, per property:
+**[Property ID] - [location], [type], PKR [price]**
+- Key facts: beds, baths, area (only what is in the data; say "not available" if missing)
+- Why it fits this buyer: 1-2 short selling angles tied to their needs
+- If asked about condition/location: one short phrase the agent can say aloud, using location notes cautiously (e.g. "residents have reported good water supply") and only if present.
+After all properties add:
+**Closing line to use:** one natural, short line to move the call forward.
+
+RULES:
+- Never invent details. Only use the listings above. Missing info = "not available".
+- If fewer listings were found than requested, or none, say so plainly. Never pad with other properties.
+- Keep every bullet short enough to read at a glance. No paragraphs.
+- Never state a unit for area (no sq ft, marla or sq yd): the data has no unit. Write the number only.
+- If a price is under 1,000 it is probably a data-entry error: do not present it as a real price, say it needs confirming.
+- Do NOT mention databases, filters, or internal systems."""
+    else:
+        main_prompt = f"""You are a knowledgeable Pakistan real estate assistant.
+Do NOT mention databases, filters or internal systems. When discussing a property, always write its Property ID (e.g. "Property ID: 123") so the user can open it.
+
+{searched}
+
+Listings from the database:
+{context}
+
+Comparison insights:
+{comparison}
+
+Recent conversation:
+{history}
+
+User query: "{last_user}"
+
+RESPONSE RULES:
+- Start by stating plainly what you searched for and how many matches you found (use the "Searched" line above).
+- If fewer listings were found than the user asked for, say so. Never pad the answer with other properties.
+- If nothing matched, say so and, if the Searched line gives it, mention the nearest range (e.g. the lowest price available). Suggest relaxing one filter.
+- Report the numbers exactly as in the Searched line. Only say there are 0 matches when it says Found 0. If the Searched line says "all listings", you are showing recent listings, not matches for something the user asked for: say that plainly.
+- For each listing: Property ID, location, type, purpose, price, beds, baths, area. Add a short note on location (water, electricity, gas, traffic, safety) only if the data has it.
+- If the user is comparing or asking for calculations (cheapest, best value, price per area): show the math, sort and rank.
+- Never state a unit for area (no sq ft, marla or sq yd): the data has no unit. Label the column just "Area".
+- If every listing is in the same location, give the location notes once, not on every row.
+- If a price is under 1,000 it is probably a data-entry error: do not present it as a real price, say it needs confirming.
+- Use only details in the listings above. If something is missing, say "not available". Never fabricate."""
+
+    text = clean_generated_response(groq_generate(main_prompt))
+    shown_cards = pick_discussed_properties(cards, text, max_links=None)
+    return {
+        "text": text,
+        "properties": shown_cards,
+        "search": {"intent": intent, "filters": f, "total_matches": total, "returned": len(rows)},
+    }
+
+
+@app.post("/chat-db")
+def chat_db(req: ChatRequest, caller: dict = Depends(_caller)):
+    """Database-based chatbot. Same body as /chat. Requires the login token."""
+    if not req.messages:
+        raise HTTPException(status_code=400, detail="messages must not be empty")
+    try:
+        payload = generate_chat_db_response(req.messages, caller["tenant_id"])
+    except Exception as e:
+        print(f"/chat-db error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"response": "Sorry, I encountered an error. Please try again.", "properties": [], "search": None}
+    return {
+        "response": payload["text"],
+        "properties": payload.get("properties", []),
+        "search": payload.get("search"),  # what was searched and how many matched (handy in Postman)
+    }
+# ==================== END ADDED ====================
+
+
 class AddListingRequest(BaseModel):
     prop_type: str
     purpose: str
