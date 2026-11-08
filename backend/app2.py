@@ -19,7 +19,10 @@ import zipfile
 import numpy as np
 import re
 from datetime import datetime
+from html import escape
+from html.parser import HTMLParser
 import jwt  # ADDED: PyJWT, used for login tokens (python -m pip install pyjwt)
+import secrets
 from datetime import timedelta  # ADDED
 from fastapi import Depends, Header  # ADDED
 from fastapi import Response  # ADDED: lets get_listings send the total count
@@ -34,14 +37,13 @@ from permissions import can_edit_listing
 
 
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 from google import genai
 from groq import Groq
 googlemodel = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 collections = None
 chroma_client = None
 indexloaded = False
-print("API key:", os.getenv("GROQ_API_KEY"))
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 def groq_generate(prompt: str) -> str:
@@ -1615,13 +1617,23 @@ def _chatdb_tenant_options(tenant_id):
     return locs, types
 
 
-def _chatdb_search(tenant_id, f: dict):
+def _chatdb_search(tenant_id, f: dict, candidate_ids: list[int] | None = None):
     """Returns (rows, total_matches, outside_price). outside_price is only set when
     nothing matched but the price limit is the reason (so the reply can say what exists)."""
     conn = get_connection()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         where, params = _chatdb_where(tenant_id, f)
+        total_matches = None
+        # The database decides availability and filter matches. RAG only ranks
+        # matching rows when it has relevant candidates; it never removes rows.
+        if candidate_ids is not None:
+            candidate_ids = sorted({int(i) for i in candidate_ids if str(i).isdigit()})
+            cur.execute(
+                f"SELECT COUNT(*) AS n FROM property_data p LEFT JOIN locations l ON p.location_id = l.id {where}",
+                tuple(params),
+            )
+            total_matches = cur.fetchone()["n"]
         cur.execute(
             f"""
             SELECT p.id, p.prop_type, p.purpose, p.covered_area, p.price,
@@ -1635,13 +1647,13 @@ def _chatdb_search(tenant_id, f: dict):
                 SELECT * FROM location_sentiments WHERE location_id = p.location_id LIMIT 1
             ) s ON TRUE
             {where}
-            ORDER BY {_CHATDB_SORTS[f['sort']]}
+            ORDER BY {('CASE WHEN p.id = ANY(%s) THEN 0 ELSE 1 END, array_position(%s::int[], p.id) NULLS LAST, ' if candidate_ids else '')}{_CHATDB_SORTS[f['sort']]}
             LIMIT %s
             """,
-            tuple(params + [f["limit"]]),
+            tuple(params + ([candidate_ids, candidate_ids] if candidate_ids else []) + [f["limit"]]),
         )
         rows = cur.fetchall()
-        total = rows[0]["_total"] if rows else 0
+        total = total_matches if total_matches is not None else (rows[0]["_total"] if rows else 0)
         for r in rows:
             r.pop("_total", None)
 
@@ -1687,7 +1699,7 @@ def _chatdb_describe(f: dict, total: int, shown: int, outside_price) -> str:
         parts.append(f"{f['baths']} baths")
     what = ", ".join(parts) if parts else "all listings"
     line = f"Searched: {what}; up to {f['limit']} results, sorted by {f['sort']}. "
-    line += f"Found {total} matching listing(s) in total; showing {shown}."
+    line += f"Found {total} listing(s) matching your filters; showing {shown}."
     if total == 0 and outside_price:
         line += (
             f" Without the price limit there are {outside_price['count']} listing(s) for the other filters,"
@@ -1723,11 +1735,156 @@ def _chatdb_cards(rows: list) -> list:
     return cards
 
 
+_CHATDB_TAGS = {"p", "br", "strong", "em", "b", "i", "ul", "ol", "li", "a"}
+_CHATDB_SKIP_TAGS = {"script", "style", "iframe", "object", "embed", "link", "meta"}
+
+
+def _chatdb_visible_text(text: str) -> str:
+    """Strip tags so later turns see the words the user saw, not the markup."""
+    plain = re.sub(r"<[^>]+>", " ", text or "")
+    return re.sub(r"\s+", " ", plain).strip()
+
+
+def _chatdb_inline_markup(text: str) -> str:
+    safe = escape(text.strip())
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+    safe = re.sub(r"(?<!\*)\*(.+?)\*(?!\*)", r"<em>\1</em>", safe)
+    return safe
+
+
+def _chatdb_plain_to_html(text: str) -> str:
+    """Turn a plain or lightly marked-up reply into the tags the page can render."""
+    lines = (text or "").replace("\r\n", "\n").split("\n")
+    blocks = []
+    items = []
+
+    def flush_list():
+        nonlocal items
+        if items:
+            blocks.append("<ul>" + "".join(f"<li>{_chatdb_inline_markup(item)}</li>" for item in items) + "</ul>")
+            items = []
+
+    for line in lines:
+        bullet = re.match(r"^\s*[-*]\s+(.*)$", line)
+        if bullet:
+            items.append(bullet.group(1))
+            continue
+        flush_list()
+        if line.strip():
+            blocks.append(f"<p>{_chatdb_inline_markup(line)}</p>")
+    flush_list()
+    return "".join(blocks)
+
+
+class _ChatHtmlSanitizer(HTMLParser):
+    """Keep a small set of tags. Anchors may only point at a listing we actually returned."""
+
+    def __init__(self, allowed_ids):
+        super().__init__(convert_charrefs=True)
+        self.allowed_ids = {str(i) for i in allowed_ids}
+        self.parts = []
+        self.skip_depth = 0
+        self.anchor_open = []
+
+    def handle_starttag(self, tag, attrs):
+        self._start(tag, attrs)
+
+    def handle_startendtag(self, tag, attrs):
+        self._start(tag, attrs, self_closing=True)
+
+    def _start(self, tag, attrs, self_closing=False):
+        tag = (tag or "").lower()
+        if tag in _CHATDB_SKIP_TAGS:
+            if not self_closing:
+                self.skip_depth += 1
+            return
+        if self.skip_depth:
+            return
+        if tag == "a":
+            href = ""
+            for key, value in attrs:
+                if (key or "").lower() == "href":
+                    href = (value or "").strip()
+            match = re.fullmatch(r"/property/(\d+)", href)
+            ok = bool(match and match.group(1) in self.allowed_ids)
+            self.anchor_open.append(ok)
+            if ok:
+                self.parts.append(f'<a href="/property/{match.group(1)}">')
+            return
+        if tag == "br":
+            self.parts.append("<br>")
+            return
+        if tag in _CHATDB_TAGS and not self_closing:
+            self.parts.append(f"<{tag}>")
+
+    def handle_endtag(self, tag):
+        tag = (tag or "").lower()
+        if tag in _CHATDB_SKIP_TAGS:
+            if self.skip_depth:
+                self.skip_depth -= 1
+            return
+        if self.skip_depth:
+            return
+        if tag == "a":
+            if self.anchor_open and self.anchor_open.pop():
+                self.parts.append("</a>")
+            return
+        if tag in _CHATDB_TAGS and tag != "br":
+            self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self.skip_depth or not data:
+            return
+        self.parts.append(escape(data))
+
+    def get_html(self) -> str:
+        return "".join(self.parts)
+
+
+def _linkify_property_ids(html: str, ids: list) -> str:
+    """Turn leftover 'Property 123' mentions into listing links, without nesting anchors."""
+    unique = sorted({str(i) for i in ids if i is not None}, key=len, reverse=True)
+    if not unique or not html:
+        return html
+    id_alt = "|".join(re.escape(i) for i in unique)
+    mention = re.compile(
+        rf"(?<![\w/])(?:Property\s*ID|Property|ID)\s*[:#]?\s*({id_alt})(?!\d)",
+        re.IGNORECASE,
+    )
+    bare_path = re.compile(rf"(?<![\"'>])(/property/({id_alt}))(?!\d)")
+    pieces = re.split(r"(<a\b[^>]*>.*?</a>)", html, flags=re.IGNORECASE | re.DOTALL)
+    out = []
+    for index, piece in enumerate(pieces):
+        if index % 2 == 1:
+            out.append(piece)
+            continue
+        piece = mention.sub(lambda m: f'<a href="/property/{m.group(1)}">Property {m.group(1)}</a>', piece)
+        piece = bare_path.sub(lambda m: f'<a href="/property/{m.group(2)}">Property {m.group(2)}</a>', piece)
+        out.append(piece)
+    return "".join(out)
+
+
+def _chatdb_to_safe_html(text: str, property_ids: list) -> str:
+    raw = (text or "").strip()
+    raw = re.sub(r"^```(?:html)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw).strip()
+    if not raw:
+        return "<p>Sorry, I couldn't generate a response.</p>"
+    if not re.search(r"<\s*/?\s*[a-zA-Z]", raw):
+        raw = _chatdb_plain_to_html(raw)
+    parser = _ChatHtmlSanitizer(property_ids)
+    parser.feed(raw)
+    parser.close()
+    html = _linkify_property_ids(parser.get_html(), property_ids)
+    return html or "<p>Sorry, I couldn't generate a response.</p>"
+
+
 def _chatdb_context(rows: list) -> str:
     parts = []
     for r in rows:
         # CHANGED: purpose shown as For Sale / For Rent
-        bits = [f"Property ID: {r['id']}", str(_chatdb_purpose_label(r.get("purpose")) or "N/A"), str(r.get("prop_type") or "N/A"),
+        bits = [f"Property ID: {r['id']}", f"Page: /property/{r['id']}",
+                str(_chatdb_purpose_label(r.get("purpose")) or "N/A"), str(r.get("prop_type") or "N/A"),
                 str(r.get("location") or "N/A")]
         bits.append(_chatdb_pkr(r["price"]) if r.get("price") is not None else "Price: not available")
         bits.append(f"Beds: {r['beds'] if r.get('beds') is not None else 'not available'}")
@@ -1745,11 +1902,34 @@ def _chatdb_context(rows: list) -> str:
     return "\n\n---\n\n".join(parts) if parts else "[No matching listings.]"
 
 
+def _chatdb_rag_candidate_ids(query: str) -> list[int]:
+    """Return property IDs proposed by semantic retrieval, preserving rank."""
+    result = retrieve(query, n_results=40, top_k=20)
+    ids = []
+    seen = set()
+    for doc_id, meta, doc in zip(
+        result.get("ids", []) or [],
+        result.get("metadatas", []) or [],
+        result.get("documents", []) or [],
+    ):
+        raw_id = (meta or {}).get("id") or doc_id
+        match = re.search(r"(\d+)$", str(raw_id or "").strip())
+        if not match and doc:
+            match = re.search(r"property\s*id\s*[:#]?\s*(\d+)", doc, re.IGNORECASE)
+        if match:
+            property_id = int(match.group(1))
+            if property_id not in seen:
+                ids.append(property_id)
+                seen.add(property_id)
+    return ids
+
+
 def generate_chat_db_response(messages: List[ChatMessage], tenant_id) -> dict:
     last_user = messages[-1].content
     recent = messages[-6:]
     history = "\n".join(
-        f"{'User' if m.role == 'user' else 'Assistant'}: {m.content[:220]}" for m in recent[:-1]
+        f"{'User' if m.role == 'user' else 'Assistant'}: {_chatdb_visible_text(m.content)[:220]}"
+        for m in recent[:-1]
     )
     locs, types = _chatdb_tenant_options(tenant_id)
 
@@ -1801,7 +1981,8 @@ Current user message: "{last_user}"
     except Exception:
         raw = {}
     if not raw:
-        return {"text": "Sorry, I couldn't work out what to search for. Could you rephrase that?",
+        return {"text": _chatdb_to_safe_html(
+                    "Sorry, I couldn't work out what to search for. Could you rephrase that?", []),
                 "properties": [], "search": None}
 
     intent = str(raw.get("intent") or "property_search").strip().lower()
@@ -1817,14 +1998,16 @@ Recent conversation:
 
 User message: "{last_user}"
 
-Respond in 1-3 sentences. Do NOT list properties or use markdown headers.
+Respond in 1-3 sentences as HTML using only <p>, <strong>, and <em>. No property links, no markdown, no code fences.
 If the user greeted you, greet them back and say you can find properties, write pitches, or answer real estate questions."""
-        return {"text": groq_generate(chat_prompt).strip(), "properties": [],
+        text = _chatdb_to_safe_html(groq_generate(chat_prompt).strip(), [])
+        return {"text": text, "properties": [],
                 "search": {"intent": intent, "filters": None}}
 
     # ---- Step 2: validate filters, then run the SQL (tenant from the token) ----
     f = _chatdb_clean_filters(raw)
-    rows, total, outside_price = _chatdb_search(tenant_id, f)
+    rag_ids = _chatdb_rag_candidate_ids(last_user)
+    rows, total, outside_price = _chatdb_search(tenant_id, f, rag_ids)
     searched = _chatdb_describe(f, total, len(rows), outside_price)
     cards = _chatdb_cards(rows)
     comparison = build_comparison_insights(cards)
@@ -1847,15 +2030,19 @@ User's request: "{last_user}"
 First work out what likely matters most to this buyer (budget, family size, location, investment vs living). Use it to choose what to surface; do not show it as a separate section.
 If there are several properties, put the strongest match first, give it the most space, and be honest about where weaker matches fall short.
 
-FORMAT, per property:
-**[Property ID] - [location], [type], PKR [price]**
-- Key facts: beds, baths, area (only what is in the data; say "not available" if missing)
-- Why it fits this buyer: 1-2 short selling angles tied to their needs
-- If asked about condition/location: one short phrase the agent can say aloud, using location notes cautiously (e.g. "residents have reported good water supply") and only if present.
+OUTPUT: HTML only. Allowed tags: <p>, <ul>, <li>, <strong>, <em>, <a>. No markdown, no code fences.
+FORMAT, per property, as a list item:
+<li><a href="/property/ID">Property ID</a> — <strong>location, type, PKR price</strong>
+<ul>
+<li>Key facts: beds, baths, area (only what is in the data; say "not available" if missing)</li>
+<li>Why it fits this buyer: 1-2 short selling angles tied to their needs</li>
+<li>If asked about condition/location: one short phrase the agent can say aloud, using location notes cautiously (e.g. "residents have reported good water supply") and only if present.</li>
+</ul></li>
 After all properties add:
-**Closing line to use:** one natural, short line to move the call forward.
+<p><strong>Closing line to use:</strong> one natural, short line to move the call forward.</p>
 
 RULES:
+- Every property you name must be an <a href="/property/ID"> using that listing's Property ID and Page. No other links.
 - Never invent details. Only use the listings above. Missing info = "not available".
 - If fewer listings were found than requested, or none, say so plainly. Never pad with other properties.
 - Keep every bullet short enough to read at a glance. No paragraphs.
@@ -1864,7 +2051,10 @@ RULES:
 - Do NOT mention databases, filters, or internal systems."""
     else:
         main_prompt = f"""You are a knowledgeable Pakistan real estate assistant.
-Do NOT mention databases, filters or internal systems. When discussing a property, always write its Property ID (e.g. "Property ID: 123") so the user can open it.
+Do NOT mention databases, filters or internal systems.
+Write the reply as HTML so each property name is a link to its page.
+Allowed tags only: <p>, <br>, <strong>, <em>, <ul>, <ol>, <li>, <a>. No markdown and no code fences.
+Every property you mention must look like <a href="/property/123">Property 123</a>, using that listing's Property ID and Page. Do not link anything else.
 
 {searched}
 
@@ -1885,14 +2075,19 @@ RESPONSE RULES:
 - If nothing matched, say so and, if the Searched line gives it, mention the nearest range (e.g. the lowest price available). Suggest relaxing one filter.
 - Report the numbers exactly as in the Searched line. Only say there are 0 matches when it says Found 0. If the Searched line says "all listings", you are showing recent listings, not matches for something the user asked for: say that plainly.
 - For each listing: Property ID, location, type, purpose, price, beds, baths, area. Add a short note on location (water, electricity, gas, traffic, safety) only if the data has it.
+- Rank the listings from strongest to weakest match. Explain why the first property best matches the user's stated needs, citing concrete matching details (such as budget fit, location, bedrooms, property type, or purpose). Be clear about any trade-off for other options.
+- Treat the database facts as authoritative. Use the retrieved candidates only when they also pass the tenant and filter checks; never invent or substitute a property.
 - If the user is comparing or asking for calculations (cheapest, best value, price per area): show the math, sort and rank.
 - Never state a unit for area (no sq ft, marla or sq yd): the data has no unit. Label the column just "Area".
 - If every listing is in the same location, give the location notes once, not on every row.
 - If a price is under 1,000 it is probably a data-entry error: do not present it as a real price, say it needs confirming.
 - Use only details in the listings above. If something is missing, say "not available". Never fabricate."""
 
-    text = clean_generated_response(groq_generate(main_prompt))
-    shown_cards = pick_discussed_properties(cards, text, max_links=None)
+    text = _chatdb_to_safe_html(
+        clean_generated_response(groq_generate(main_prompt)),
+        [r["id"] for r in rows],
+    )
+    shown_cards = pick_discussed_properties(cards, _chatdb_visible_text(text), max_links=None)
     return {
         "text": text,
         "properties": shown_cards,
@@ -1932,7 +2127,30 @@ class AddListingRequest(BaseModel):
 
 
 # ==================== ADDED: token auth + add-agent endpoint ====================
-JWT_SECRET = os.getenv("JWT_SECRET")
+def _load_jwt_secret() -> str:
+    """Use configured secret, or create a stable local key without .env edits."""
+    configured = os.getenv("JWT_SECRET", "").strip()
+    if configured:
+        return configured
+    secret_path = Path(os.getenv("JWT_SECRET_FILE", str(APP_DIR / ".jwt_secret")))
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with secret_path.open("x", encoding="utf-8") as secret_file:
+            secret_file.write(secrets.token_urlsafe(64))
+    except FileExistsError:
+        # Another worker may have created the file but not finished writing yet.
+        for _ in range(100):
+            value = secret_path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+            time.sleep(0.01)
+    value = secret_path.read_text(encoding="utf-8").strip()
+    if not value:
+        raise RuntimeError(f"JWT signing key file is empty: {secret_path}")
+    return value
+
+
+JWT_SECRET = _load_jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 12
 

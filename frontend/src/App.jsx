@@ -34,6 +34,7 @@ import NavBar from './components/NavBar'
 import Listings from './pages/Listings'
 import Locations from './pages/Locations'
 import ChatBotPage from './pages/ChatBotPage'
+import DbChatPage from './pages/DbChatPage'
 //import CompareProperties from './pages/CompareProperties'
 import AddListing from './pages/AddListing'
 import AddAgent from './pages/AddAgent'
@@ -62,6 +63,7 @@ export default function App(){
           <Route path="/" element={<Listings filterLocation={filterLocation} />} />
           <Route path="/locations" element={<Locations onSelectLocation={setFilterLocation} />} />
           <Route path="/chatbot" element={<ChatBotPage />} />
+          <Route path="/chat-db" element={<DbChatPage />} />
           <Route path="/add-agent" element={<AddAgent />} />
           {/* ==== ADDED ==== */}
           <Route path="/sales" element={<Sales />} />

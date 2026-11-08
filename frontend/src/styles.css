@@ -70,6 +70,33 @@ body {
   border-bottom-color: #0b5d56;
 }
 
+.db-chat-html p{
+  margin: 0 0 0.55rem;
+}
+.db-chat-html p:last-child,
+.db-chat-html ul:last-child,
+.db-chat-html ol:last-child{
+  margin-bottom: 0;
+}
+.db-chat-html ul,
+.db-chat-html ol{
+  margin: 0.2rem 0 0.55rem;
+  padding-left: 1.2rem;
+}
+.db-chat-html li{
+  margin: 0.15rem 0;
+}
+.db-chat-html a{
+  color: #0f766e;
+  font-weight: 700;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(15,118,110,.45);
+}
+.db-chat-html a:hover{
+  color: #0b5d56;
+  border-bottom-color: #0b5d56;
+}
+
 .skeleton-card {
   background: linear-gradient(120deg, rgba(20,184,166,0.12), rgba(245,158,11,0.08), rgba(20,184,166,0.12));
   background-size: 200% 200%;
