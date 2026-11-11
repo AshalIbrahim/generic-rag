@@ -1,18 +1,36 @@
+/**
+ * Sign-in.
+ *
+ * Rewritten: this page used a purple gradient and shadow found nowhere else in
+ * the product, so the first screen set an expectation the rest of the app did
+ * not keep. It now uses the same neutral surface, accent and type scale as
+ * every other page.
+ *
+ * The layout is a 61.8 / 38.2 split on desktop -- the form sits in the minor
+ * column, with the majority given to a plain statement of what this tool is.
+ * On mobile the panel stands alone.
+ */
 import React, { useState } from 'react'
-import Box from '@mui/material/Box'
-import Card from '@mui/material/Card'
-import CardContent from '@mui/material/CardContent'
-import Typography from '@mui/material/Typography'
-import TextField from '@mui/material/TextField'
-import Button from '@mui/material/Button'
-import InputAdornment from '@mui/material/InputAdornment'
-import IconButton from '@mui/material/IconButton'
-import Divider from '@mui/material/Divider'
 import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
+import IconButton from '@mui/material/IconButton'
+import InputAdornment from '@mui/material/InputAdornment'
+import Paper from '@mui/material/Paper'
+import TextField from '@mui/material/TextField'
+import Typography from '@mui/material/Typography'
+import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined'
+import VisibilityOffOutlined from '@mui/icons-material/VisibilityOffOutlined'
 
-console.log('API URL:', import.meta.env.VITE_API_URL)
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+import { API } from '../auth'
+import { SPACE, SPLIT, palette } from '../theme'
+
+const FEATURES = [
+  ['Listings', 'Search the agency inventory, with photos and location notes.'],
+  ['Leads & follow-ups', 'Keep track of who to call next, and what was said last time.'],
+  ['Sales & commissions', 'Record closed deals; splits are worked out for you.'],
+]
 
 export default function Login({ onLoginSuccess }) {
   const [form, setForm] = useState({ email: '', password: '' })
@@ -21,39 +39,40 @@ export default function Login({ onLoginSuccess }) {
   const [error, setError] = useState('')
 
   function handleChange(e) {
-    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }))
+    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
     if (error) setError('')
   }
 
   async function handleSubmit(e) {
     e.preventDefault()
     if (!form.email || !form.password) {
-      setError('Please fill in all fields.')
+      setError('Enter your email and password.')
       return
     }
     try {
-      console.log('Inside login function')
       setLoading(true)
       setError('')
-      const resp = await fetch(API + '/auth/login', {
+      const resp = await fetch(`${API}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: form.email, password: form.password }),
       })
-      const data = await resp.json()
+      const data = await resp.json().catch(() => ({}))
       if (!resp.ok) {
-        setError(data.detail || 'Invalid email or password.')
+        setError(typeof data.detail === 'string' ? data.detail : 'That email and password did not match.')
         return
       }
       if (!data.token) {
-        setError('Login succeeded without an access token. Please contact support.')
+        setError('Signed in, but no access token came back. Ask your agency owner to check the server.')
         return
       }
       localStorage.setItem('token', data.token)
-      if (onLoginSuccess) onLoginSuccess(data)
+      if (onLoginSuccess) {
+        onLoginSuccess({ id: data.id, email: data.email, role: data.role, tenant_id: data.tenant_id })
+      }
     } catch (err) {
       console.error('login', err)
-      setError('Unable to connect. Please try again.')
+      setError('Could not reach the server. Check your connection and try again.')
     } finally {
       setLoading(false)
     }
@@ -63,125 +82,176 @@ export default function Login({ onLoginSuccess }) {
     <Box
       sx={{
         minHeight: '100vh',
+        bgcolor: palette.canvas,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #f3e5f5 0%, #ede7f6 50%, #e8eaf6 100%)',
-        px: 2,
+        p: { xs: `${SPACE.xl}px`, md: `${SPACE.xxl}px` },
       }}
     >
-      <Card
+      <Box
         sx={{
           width: '100%',
-          maxWidth: 440,
-          borderRadius: 4,
-          boxShadow: '0 8px 40px rgba(106,27,154,0.12)',
-          background: 'linear-gradient(135deg, rgba(103,58,183,0.06), rgba(156,39,176,0.03))',
-          border: '1px solid rgba(142,36,170,0.12)',
+          maxWidth: 987, // Fibonacci
+          display: 'flex',
+          alignItems: 'stretch',
+          gap: `${SPACE.xxl}px`,
         }}
       >
-        <CardContent sx={{ p: 4 }}>
-          {/* Header */}
-          <Box sx={{ mb: 3, textAlign: 'center' }}>
+        {/* Major column: what this is. Hidden on small screens, where the form
+            is the only thing that matters. */}
+        <Box
+          sx={{
+            width: SPLIT.major,
+            display: { xs: 'none', md: 'flex' },
+            flexDirection: 'column',
+            justifyContent: 'center',
+            pr: `${SPACE.xl}px`,
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: `${SPACE.lg}px`, mb: `${SPACE.xl}px` }}>
             <Box
+              aria-hidden
               sx={{
-                width: 52,
-                height: 52,
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg, #8e24aa, #5e35b1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                mx: 'auto',
-                mb: 2,
-                boxShadow: '0 4px 14px rgba(142,36,170,0.35)',
+                width: 29,
+                height: 29,
+                borderRadius: '8px',
+                bgcolor: palette.accent,
+                color: '#fff',
+                display: 'grid',
+                placeItems: 'center',
+                fontSize: 13,
+                fontWeight: 700,
               }}
             >
-              {/* Home / key icon using pure SVG */}
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M12 2L3 9v11a1 1 0 001 1h5v-6h6v6h5a1 1 0 001-1V9L12 2z"
-                  fill="white"
-                  opacity="0.9"
-                />
-              </svg>
+              Z
             </Box>
-            <Typography
-              variant="h5"
-              sx={{ fontWeight: 800, color: '#4a148c', letterSpacing: '-0.5px' }}
-            >
-              Welcome back
-            </Typography>
-            <Typography variant="body2" sx={{ color: 'rgba(0,0,0,0.5)', mt: 0.5 }}>
-              Sign in to your account to continue
-            </Typography>
+            <Typography sx={{ fontSize: 15, fontWeight: 620 }}>Zameen</Typography>
           </Box>
 
-          {/* Error */}
+          <Typography variant="h1" sx={{ fontSize: 28, mb: `${SPACE.lg}px` }}>
+            The workspace for your agency
+          </Typography>
+          <Typography variant="body1" color="text.secondary" sx={{ maxWidth: '48ch', mb: `${SPACE.xl}px` }}>
+            One place for your listings, your buyers and what everyone on the team has closed.
+          </Typography>
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: `${SPACE.lg}px` }}>
+            {FEATURES.map(([title, detail]) => (
+              <Box key={title} sx={{ display: 'flex', gap: `${SPACE.lg}px` }}>
+                <Box
+                  aria-hidden
+                  sx={{
+                    width: 5,
+                    borderRadius: 3,
+                    bgcolor: palette.accentBorder,
+                    flexShrink: 0,
+                    mt: '3px',
+                    mb: '3px',
+                  }}
+                />
+                <Box>
+                  <Typography variant="h4">{title}</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: `${SPACE.xxs}px` }}>
+                    {detail}
+                  </Typography>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+
+        {/* Minor column: the form. */}
+        <Paper
+          variant="outlined"
+          sx={{
+            width: { xs: '100%', md: SPLIT.minor },
+            maxWidth: { xs: 377, md: 'none' }, // Fibonacci
+            mx: { xs: 'auto', md: 0 },
+            p: { xs: `${SPACE.xl}px`, sm: `${SPACE.xxl}px` },
+            alignSelf: 'center',
+          }}
+        >
+          {/* Brand repeats here for mobile, where the left column is hidden. */}
+          <Box
+            sx={{
+              display: { xs: 'flex', md: 'none' },
+              alignItems: 'center',
+              gap: `${SPACE.md}px`,
+              mb: `${SPACE.xl}px`,
+            }}
+          >
+            <Box
+              aria-hidden
+              sx={{
+                width: 26,
+                height: 26,
+                borderRadius: '7px',
+                bgcolor: palette.accent,
+                color: '#fff',
+                display: 'grid',
+                placeItems: 'center',
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              Z
+            </Box>
+            <Typography sx={{ fontSize: 14, fontWeight: 620 }}>Zameen</Typography>
+          </Box>
+
+          <Typography variant="h2" component="h1">
+            Sign in
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: `${SPACE.sm}px`, mb: `${SPACE.xl}px` }}>
+            Use the account your agency owner set up for you.
+          </Typography>
+
           {error && (
-            <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+            <Alert severity="error" sx={{ mb: `${SPACE.lg}px` }}>
               {error}
             </Alert>
           )}
 
-          {/* Form */}
           <Box component="form" onSubmit={handleSubmit} noValidate>
-            <TextField
-              fullWidth
-              label="Email address"
-              name="email"
-              type="email"
-              value={form.email}
-              onChange={handleChange}
-              autoComplete="email"
-              size="small"
-              sx={fieldSx}
-            />
-
-            <TextField
-              fullWidth
-              label="Password"
-              name="password"
-              type={showPassword ? 'text' : 'password'}
-              value={form.password}
-              onChange={handleChange}
-              autoComplete="current-password"
-              size="small"
-              sx={{ ...fieldSx, mt: 2 }}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      size="small"
-                      onClick={() => setShowPassword(p => !p)}
-                      edge="end"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8e24aa" strokeWidth="2">
-                          <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
-                          <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
-                          <line x1="1" y1="1" x2="23" y2="23" />
-                        </svg>
-                      ) : (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8e24aa" strokeWidth="2">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                          <circle cx="12" cy="12" r="3" />
-                        </svg>
-                      )}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-            />
-
-            <Box sx={{ textAlign: 'right', mt: 1 }}>
-              <Typography
-                variant="caption"
-                sx={{ color: '#8e24aa', cursor: 'pointer', fontWeight: 600, '&:hover': { textDecoration: 'underline' } }}
-              >
-                Forgot password?
-              </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: `${SPACE.lg}px` }}>
+              <TextField
+                fullWidth
+                label="Email"
+                name="email"
+                type="email"
+                value={form.email}
+                onChange={handleChange}
+                autoComplete="email"
+                autoFocus
+              />
+              <TextField
+                fullWidth
+                label="Password"
+                name="password"
+                type={showPassword ? 'text' : 'password'}
+                value={form.password}
+                onChange={handleChange}
+                autoComplete="current-password"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        size="small"
+                        onClick={() => setShowPassword((p) => !p)}
+                        edge="end"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? (
+                          <VisibilityOffOutlined sx={{ fontSize: 18 }} />
+                        ) : (
+                          <VisibilityOutlined sx={{ fontSize: 18 }} />
+                        )}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
+              />
             </Box>
 
             <Button
@@ -189,53 +259,17 @@ export default function Login({ onLoginSuccess }) {
               fullWidth
               variant="contained"
               disabled={loading}
-              sx={{
-                mt: 2.5,
-                py: 1.3,
-                borderRadius: 2.5,
-                background: 'linear-gradient(135deg, #8e24aa, #5e35b1)',
-                fontWeight: 700,
-                fontSize: 15,
-                letterSpacing: 0.3,
-                textTransform: 'none',
-                boxShadow: '0 4px 14px rgba(142,36,170,0.3)',
-                '&:hover': {
-                  background: 'linear-gradient(135deg, #7b1fa2, #512da8)',
-                  boxShadow: '0 6px 20px rgba(142,36,170,0.4)',
-                },
-                '&:disabled': {
-                  background: 'rgba(142,36,170,0.3)',
-                },
-              }}
+              sx={{ mt: `${SPACE.xl}px`, minHeight: 38 }}
             >
-              {loading ? <CircularProgress size={22} sx={{ color: 'white' }} /> : 'Sign in'}
+              {loading ? <CircularProgress size={17} sx={{ color: 'inherit' }} /> : 'Sign in'}
             </Button>
           </Box>
 
-          <Divider sx={{ my: 3, borderColor: 'rgba(142,36,170,0.15)' }} />
-
-          <Typography variant="body2" sx={{ textAlign: 'center', color: 'rgba(0,0,0,0.55)' }}>
-            Don't have an account?{' '}
-            <Typography
-              component="span"
-              variant="body2"
-              sx={{ color: '#8e24aa', fontWeight: 700, cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
-            >
-              Sign up
-            </Typography>
+          <Typography variant="caption" sx={{ display: 'block', mt: `${SPACE.xl}px`, color: 'text.secondary' }}>
+            Accounts are created by your agency owner. If you cannot get in, ask them to reset your password.
           </Typography>
-        </CardContent>
-      </Card>
+        </Paper>
+      </Box>
     </Box>
   )
-}
-
-const fieldSx = {
-  '& .MuiOutlinedInput-root': {
-    borderRadius: 2,
-    '& fieldset': { borderColor: 'rgba(142,36,170,0.25)' },
-    '&:hover fieldset': { borderColor: '#8e24aa' },
-    '&.Mui-focused fieldset': { borderColor: '#8e24aa' },
-  },
-  '& .MuiInputLabel-root.Mui-focused': { color: '#8e24aa' },
 }

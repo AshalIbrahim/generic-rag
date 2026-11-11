@@ -1,39 +1,72 @@
-import React, { useEffect, useState } from 'react'
-import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  Chip,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  Grid,
-  MenuItem,
-  Paper,
-  Tab,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Tabs,
-  TextField,
-  Typography,
-} from '@mui/material'
-import { api, formatPKR } from '../auth'
+/**
+ * Leads and follow-ups -- the page an agent keeps open.
+ *
+ * Changes beyond styling:
+ * - A summary strip answers "what do I have to do today?" before the tables.
+ * - Follow-up dates read as "Overdue by 2 days" / "Today", not a timestamp.
+ * - Completing a follow-up used window.prompt(), a browser dialog that looks
+ *   nothing like the app and cannot be cancelled cleanly. It is a proper
+ *   dialog now.
+ * - The search box debounces instead of refetching on every keystroke.
+ */
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
+import Checkbox from '@mui/material/Checkbox'
+import Dialog from '@mui/material/Dialog'
+import DialogActions from '@mui/material/DialogActions'
+import DialogContent from '@mui/material/DialogContent'
+import DialogTitle from '@mui/material/DialogTitle'
+import FormControlLabel from '@mui/material/FormControlLabel'
+import InputAdornment from '@mui/material/InputAdornment'
+import MenuItem from '@mui/material/MenuItem'
+import Select from '@mui/material/Select'
+import Tab from '@mui/material/Tab'
+import Table from '@mui/material/Table'
+import TableBody from '@mui/material/TableBody'
+import TableCell from '@mui/material/TableCell'
+import TableContainer from '@mui/material/TableContainer'
+import TableHead from '@mui/material/TableHead'
+import TableRow from '@mui/material/TableRow'
+import Tabs from '@mui/material/Tabs'
+import TextField from '@mui/material/TextField'
+import Typography from '@mui/material/Typography'
+import SearchOutlined from '@mui/icons-material/SearchOutlined'
+import CakeOutlined from '@mui/icons-material/CakeOutlined'
+
+import { api } from '../auth'
+import { SPACE, palette } from '../theme'
+import { EmptyState, Loading, PageHeader, Section, Stat, StatRow, StatusChip } from '../ui'
+import { formatDateTime, formatDue, formatPKR, initials } from '../ui/format'
 
 const STATUSES = ['new', 'contacted', 'viewing', 'negotiation', 'won', 'lost']
 const CHANNELS = ['call', 'whatsapp', 'sms', 'email', 'meeting']
-const statusColor = { new: 'default', contacted: 'info', viewing: 'info', negotiation: 'warning', won: 'success', lost: 'error' }
 
 const emptyLead = { name: '', phone: '', email: '', bday: '', income: '', is_investor: false, notes: '' }
 
-const fmtDateTime = (v) => (v ? new Date(v).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—')
+function Avatarish({ name }) {
+  return (
+    <Box
+      aria-hidden
+      sx={{
+        width: 26,
+        height: 26,
+        borderRadius: '50%',
+        bgcolor: palette.surfaceSunken,
+        border: `1px solid ${palette.border}`,
+        color: palette.inkSecondary,
+        fontSize: 10,
+        fontWeight: 620,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+      }}
+    >
+      {initials(name)}
+    </Box>
+  )
+}
 
 export default function Leads() {
   const [tab, setTab] = useState(0)
@@ -44,24 +77,38 @@ export default function Leads() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  const [queryInput, setQueryInput] = useState('')
   const [query, setQuery] = useState('')
 
   const [leadDialog, setLeadDialog] = useState(false)
   const [leadForm, setLeadForm] = useState(emptyLead)
-  const [fuDialog, setFuDialog] = useState(null) // the lead a follow-up is being added to
+  const [saving, setSaving] = useState(false)
+  const [fuDialog, setFuDialog] = useState(null)
   const [fuForm, setFuForm] = useState({ due_at: '', channel: 'call', note: '' })
+  const [completing, setCompleting] = useState(null)
+  const [outcome, setOutcome] = useState('')
+
+  // Typing in the search box used to fire a request per keystroke.
+  const debounce = useRef()
+  useEffect(() => {
+    clearTimeout(debounce.current)
+    debounce.current = setTimeout(() => setQuery(queryInput.trim()), 300)
+    return () => clearTimeout(debounce.current)
+  }, [queryInput])
 
   async function load() {
     try {
       setLoading(true)
+      setError('')
       const [l, f, b] = await Promise.all([
         api(`/leads${query ? `?q=${encodeURIComponent(query)}` : ''}`),
         api(`/follow-ups?view=${view}`),
         api('/leads/birthdays?days=30'),
       ])
-      setLeads(l)
-      setFollowUps(f)
-      setBirthdays(b)
+      setLeads(Array.isArray(l) ? l : [])
+      setFollowUps(Array.isArray(f) ? f : [])
+      setBirthdays(Array.isArray(b) ? b : [])
     } catch (e) {
       setError(e.message)
     } finally {
@@ -75,23 +122,28 @@ export default function Leads() {
   }, [view, query])
 
   async function saveLead() {
+    setSaving(true)
     try {
-      const body = {
-        name: leadForm.name,
-        phone: leadForm.phone || null,
-        email: leadForm.email || null,
-        notes: leadForm.notes || null,
-        bday: leadForm.bday || null,
-        income: leadForm.income !== '' ? parseFloat(leadForm.income) : null,
-        is_investor: leadForm.is_investor,
-      }
-      await api('/leads', { method: 'POST', body })
+      await api('/leads', {
+        method: 'POST',
+        body: {
+          name: leadForm.name,
+          phone: leadForm.phone || null,
+          email: leadForm.email || null,
+          notes: leadForm.notes || null,
+          bday: leadForm.bday || null,
+          income: leadForm.income !== '' ? parseFloat(leadForm.income) : null,
+          is_investor: leadForm.is_investor,
+        },
+      })
       setLeadDialog(false)
       setLeadForm(emptyLead)
-      setNotice('Lead added.')
+      setNotice(`${leadForm.name} added.`)
       await load()
     } catch (e) {
       setError(e.message)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -105,6 +157,7 @@ export default function Leads() {
   }
 
   async function saveFollowUp() {
+    setSaving(true)
     try {
       await api(`/leads/${fuDialog.id}/follow-ups`, {
         method: 'POST',
@@ -120,168 +173,533 @@ export default function Leads() {
       await load()
     } catch (e) {
       setError(e.message)
+    } finally {
+      setSaving(false)
     }
   }
 
-  async function completeFollowUp(id) {
-    const outcome = window.prompt('How did it go? (optional)') // simple and quick; replace with a dialog if you prefer
-    if (outcome === null) return
+  async function completeFollowUp() {
+    setSaving(true)
     try {
-      await api(`/follow-ups/${id}/complete`, { method: 'PATCH', body: { outcome: outcome || null } })
+      await api(`/follow-ups/${completing.id}/complete`, {
+        method: 'PATCH',
+        body: { outcome: outcome.trim() || null },
+      })
+      setCompleting(null)
+      setOutcome('')
+      setNotice('Marked done.')
       await load()
     } catch (e) {
       setError(e.message)
+    } finally {
+      setSaving(false)
     }
   }
 
+  const counts = useMemo(() => {
+    const overdue = followUps.filter((f) => f.status === 'pending' && f.is_overdue).length
+    const pending = followUps.filter((f) => f.status === 'pending').length
+    const active = leads.filter((l) => !['won', 'lost'].includes(String(l.status || '').toLowerCase())).length
+    const won = leads.filter((l) => String(l.status || '').toLowerCase() === 'won').length
+    return { overdue, pending, active, won }
+  }, [followUps, leads])
+
   return (
-    <Box sx={{ pb: 6 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4" sx={{ fontWeight: 700 }}>Leads &amp; Follow-ups</Typography>
-        <Button variant="contained" onClick={() => setLeadDialog(true)}>Add lead</Button>
+    <Box>
+      <PageHeader
+        title="Leads & follow-ups"
+        description="Everyone you are talking to, and what you promised to do next."
+        actions={
+          <Button variant="contained" onClick={() => setLeadDialog(true)}>
+            Add lead
+          </Button>
+        }
+      />
+
+      <Box sx={{ mb: `${SPACE.xl}px` }}>
+        <StatRow>
+          <Stat label="Open leads" value={counts.active} hint={`${leads.length} in total`} />
+          <Stat label="Won" value={counts.won} tone={counts.won > 0 ? 'positive' : undefined} />
+          <Stat label="Follow-ups due" value={counts.pending} hint="in the current view" />
+          <Stat
+            label="Overdue"
+            value={counts.overdue}
+            tone={counts.overdue > 0 ? 'negative' : undefined}
+            hint={counts.overdue > 0 ? 'Deal with these first' : 'Nothing late'}
+          />
+        </StatRow>
       </Box>
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
-      {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label={`Leads (${leads.length})`} />
-        <Tab label="Follow-ups" />
-        <Tab label={`Birthdays (${birthdays.length})`} />
-      </Tabs>
-
-      {loading && <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}><CircularProgress /></Box>}
-
-      {tab === 0 && (
-        <Paper sx={{ borderRadius: 3 }}>
-          <Box sx={{ p: 2 }}>
-            <TextField size="small" label="Search name / phone / email" value={query} onChange={(e) => setQuery(e.target.value)} sx={{ width: 320 }} />
-          </Box>
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Name</TableCell><TableCell>Contact</TableCell><TableCell>Profile</TableCell>
-                  <TableCell>Status</TableCell><TableCell>Next follow-up</TableCell><TableCell>Agent</TableCell><TableCell />
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {leads.length === 0 && !loading && (
-                  <TableRow><TableCell colSpan={7}><Typography color="text.secondary">No leads yet.</Typography></TableCell></TableRow>
-                )}
-                {leads.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell>{l.name}</TableCell>
-                    <TableCell>{[l.phone, l.email].filter(Boolean).join(' · ') || '—'}</TableCell>
-                    <TableCell>
-                      {l.is_investor && <Chip size="small" label="Investor" sx={{ mr: 0.5 }} />}
-                      {l.income ? <Typography component="span" variant="caption">income {formatPKR(l.income)}</Typography> : null}
-                    </TableCell>
-                    <TableCell>
-                      <TextField select size="small" value={l.status || 'new'} onChange={(e) => changeStatus(l.id, e.target.value)} sx={{ minWidth: 130 }}>
-                        {STATUSES.map((s) => (<MenuItem key={s} value={s}>{s}</MenuItem>))}
-                      </TextField>
-                    </TableCell>
-                    <TableCell>{fmtDateTime(l.next_follow_up)}</TableCell>
-                    <TableCell>{l.agent_name || '—'}</TableCell>
-                    <TableCell align="right"><Button size="small" onClick={() => setFuDialog(l)}>+ Follow-up</Button></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
+      {error && (
+        <Alert severity="error" sx={{ mb: `${SPACE.lg}px` }} onClose={() => setError('')}>
+          {error}
+        </Alert>
+      )}
+      {notice && (
+        <Alert severity="success" sx={{ mb: `${SPACE.lg}px` }} onClose={() => setNotice('')}>
+          {notice}
+        </Alert>
       )}
 
-      {tab === 1 && (
-        <Paper sx={{ borderRadius: 3 }}>
-          <Box sx={{ p: 2 }}>
-            <TextField select size="small" label="Show" value={view} onChange={(e) => setView(e.target.value)} sx={{ width: 200 }}>
-              <MenuItem value="pending">All pending</MenuItem>
-              <MenuItem value="today">Due today</MenuItem>
-              <MenuItem value="overdue">Overdue</MenuItem>
-              <MenuItem value="done">Completed</MenuItem>
-              <MenuItem value="all">Everything</MenuItem>
-            </TextField>
-          </Box>
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Due</TableCell><TableCell>Lead</TableCell><TableCell>How</TableCell><TableCell>Note</TableCell>
-                  <TableCell>Agent</TableCell><TableCell>Status</TableCell><TableCell />
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {followUps.length === 0 && !loading && (
-                  <TableRow><TableCell colSpan={7}><Typography color="text.secondary">Nothing here.</Typography></TableCell></TableRow>
-                )}
-                {followUps.map((f) => (
-                  <TableRow key={f.id}>
-                    <TableCell sx={{ color: f.is_overdue ? 'error.main' : 'inherit', fontWeight: f.is_overdue ? 700 : 400 }}>{fmtDateTime(f.due_at)}</TableCell>
-                    <TableCell>{f.lead_name}{f.lead_phone ? ` · ${f.lead_phone}` : ''}</TableCell>
-                    <TableCell>{f.channel || '—'}</TableCell>
-                    <TableCell>{f.note || '—'}{f.outcome ? ` → ${f.outcome}` : ''}</TableCell>
-                    <TableCell>{f.agent_name || '—'}</TableCell>
-                    <TableCell><Chip size="small" label={f.status === 'pending' && f.is_overdue ? 'overdue' : f.status} color={f.status === 'done' ? 'success' : f.is_overdue ? 'error' : 'default'} /></TableCell>
-                    <TableCell align="right">{f.status === 'pending' && <Button size="small" onClick={() => completeFollowUp(f.id)}>Mark done</Button>}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
-      )}
+      <Section>
+        <Box sx={{ px: { xs: `${SPACE.lg}px`, sm: `${SPACE.xl}px` } }}>
+          <Tabs value={tab} onChange={(_, v) => setTab(v)}>
+            <Tab label={`Leads (${leads.length})`} />
+            <Tab label={`Follow-ups (${followUps.length})`} />
+            <Tab label={`Birthdays (${birthdays.length})`} />
+          </Tabs>
+        </Box>
 
-      {tab === 2 && (
-        <Paper sx={{ borderRadius: 3, p: 2 }}>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Birthdays in the next 30 days — a good excuse for a personal call or message.</Typography>
-          {birthdays.length === 0 && !loading && <Typography color="text.secondary">No upcoming birthdays.</Typography>}
-          {birthdays.map((b) => (
-            <Box key={b.id} sx={{ display: 'flex', justifyContent: 'space-between', py: 1, borderBottom: '1px solid', borderColor: 'divider' }}>
-              <Typography>{b.name}{b.phone ? ` · ${b.phone}` : ''} {b.is_investor && <Chip size="small" label="Investor" sx={{ ml: 1 }} />}</Typography>
-              <Typography color={b.days_until === 0 ? 'success.main' : 'text.secondary'} sx={{ fontWeight: b.days_until === 0 ? 700 : 400 }}>
-                {b.days_until === 0 ? 'Today! 🎂' : b.days_until === 1 ? 'Tomorrow' : `in ${b.days_until} days`}
-              </Typography>
+        {/* ---------------------------------------------------------- leads */}
+        {tab === 0 && (
+          <>
+            <Box
+              sx={{
+                px: { xs: `${SPACE.lg}px`, sm: `${SPACE.xl}px` },
+                py: `${SPACE.lg}px`,
+                borderBottom: `1px solid ${palette.border}`,
+              }}
+            >
+              <TextField
+                placeholder="Search name, phone or email"
+                value={queryInput}
+                onChange={(e) => setQueryInput(e.target.value)}
+                sx={{ width: { xs: '100%', sm: 322 } }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchOutlined sx={{ fontSize: 17, color: palette.inkMuted }} />
+                    </InputAdornment>
+                  ),
+                }}
+              />
             </Box>
-          ))}
-        </Paper>
-      )}
 
-      {/* Add lead */}
+            {loading && <Loading label="Loading leads" />}
+
+            {!loading && leads.length === 0 && (
+              <EmptyState
+                title={query ? 'No leads match that search' : 'No leads yet'}
+                description={
+                  query
+                    ? 'Try part of a phone number or the first few letters of a name.'
+                    : 'Add the people you are talking to, and the team can pick up where you left off.'
+                }
+                action={
+                  !query && (
+                    <Button variant="contained" onClick={() => setLeadDialog(true)}>
+                      Add lead
+                    </Button>
+                  )
+                }
+              />
+            )}
+
+            {!loading && leads.length > 0 && (
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Lead</TableCell>
+                      <TableCell>Contact</TableCell>
+                      <TableCell>Profile</TableCell>
+                      <TableCell sx={{ width: 150 }}>Status</TableCell>
+                      <TableCell>Next follow-up</TableCell>
+                      <TableCell>Agent</TableCell>
+                      <TableCell align="right" />
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {leads.map((l) => (
+                      <TableRow key={l.id} hover>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: `${SPACE.md}px` }}>
+                            <Avatarish name={l.name} />
+                            <Typography sx={{ fontWeight: 550 }}>{l.name}</Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
+                          {l.phone || l.email ? (
+                            <>
+                              {l.phone && <Box component="div">{l.phone}</Box>}
+                              {l.email && (
+                                <Box component="div" sx={{ fontSize: 12 }}>
+                                  {l.email}
+                                </Box>
+                              )}
+                            </>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: `${SPACE.sm}px`, flexWrap: 'wrap' }}>
+                            {l.is_investor && <StatusChip status="__investor" label="Investor" />}
+                            {l.income ? (
+                              <Typography variant="caption" className="tnum" sx={{ color: 'text.secondary' }}>
+                                {formatPKR(l.income)}/mo
+                              </Typography>
+                            ) : null}
+                            {!l.is_investor && !l.income && <Typography sx={{ color: 'text.disabled' }}>—</Typography>}
+                          </Box>
+                        </TableCell>
+                        <TableCell>
+                          {/* A bare Select reads as a value you can change,
+                              where an outlined field looked like a form. */}
+                          <Select
+                            variant="standard"
+                            disableUnderline
+                            value={String(l.status || 'new').toLowerCase()}
+                            onChange={(e) => changeStatus(l.id, e.target.value)}
+                            renderValue={(v) => <StatusChip status={v} />}
+                            sx={{ '& .MuiSelect-select': { py: 0, pr: '20px !important' } }}
+                          >
+                            {STATUSES.map((s) => (
+                              <MenuItem key={s} value={s}>
+                                <StatusChip status={s} />
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </TableCell>
+                        <TableCell
+                          sx={{
+                            whiteSpace: 'nowrap',
+                            color: l.next_follow_up ? 'text.primary' : 'text.disabled',
+                          }}
+                        >
+                          {l.next_follow_up ? (
+                            <>
+                              <Box component="div">{formatDue(l.next_follow_up)}</Box>
+                              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                {formatDateTime(l.next_follow_up)}
+                              </Typography>
+                            </>
+                          ) : (
+                            'Nothing scheduled'
+                          )}
+                        </TableCell>
+                        <TableCell sx={{ color: 'text.secondary' }}>{l.agent_name || '—'}</TableCell>
+                        <TableCell align="right">
+                          <Button size="small" variant="outlined" onClick={() => setFuDialog(l)}>
+                            Schedule
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </>
+        )}
+
+        {/* ----------------------------------------------------- follow-ups */}
+        {tab === 1 && (
+          <>
+            <Box
+              sx={{
+                px: { xs: `${SPACE.lg}px`, sm: `${SPACE.xl}px` },
+                py: `${SPACE.lg}px`,
+                borderBottom: `1px solid ${palette.border}`,
+              }}
+            >
+              <TextField select label="Show" value={view} onChange={(e) => setView(e.target.value)} sx={{ width: 207 }}>
+                <MenuItem value="pending">All pending</MenuItem>
+                <MenuItem value="today">Due today</MenuItem>
+                <MenuItem value="overdue">Overdue</MenuItem>
+                <MenuItem value="done">Completed</MenuItem>
+                <MenuItem value="all">Everything</MenuItem>
+              </TextField>
+            </Box>
+
+            {loading && <Loading label="Loading follow-ups" />}
+
+            {!loading && followUps.length === 0 && (
+              <EmptyState
+                title="Nothing here"
+                description={
+                  view === 'overdue'
+                    ? 'Nothing is overdue. That is the way it should look.'
+                    : 'No follow-ups in this view. Schedule one from the Leads tab.'
+                }
+                compact
+              />
+            )}
+
+            {!loading && followUps.length > 0 && (
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Due</TableCell>
+                      <TableCell>Lead</TableCell>
+                      <TableCell>How</TableCell>
+                      <TableCell>Note</TableCell>
+                      <TableCell>Agent</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell align="right" />
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {followUps.map((f) => {
+                      const late = f.status === 'pending' && f.is_overdue
+                      return (
+                        <TableRow key={f.id} hover>
+                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                            <Box sx={{ color: late ? 'error.main' : 'text.primary', fontWeight: late ? 600 : 400 }}>
+                              {formatDue(f.due_at)}
+                            </Box>
+                            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                              {formatDateTime(f.due_at)}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography sx={{ fontWeight: 550 }}>{f.lead_name}</Typography>
+                            {f.lead_phone && (
+                              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                {f.lead_phone}
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell sx={{ color: 'text.secondary', textTransform: 'capitalize' }}>
+                            {f.channel || '—'}
+                          </TableCell>
+                          <TableCell sx={{ color: 'text.secondary', maxWidth: 288 }}>
+                            {f.note || '—'}
+                            {f.outcome && (
+                              <Typography variant="caption" sx={{ display: 'block', color: 'success.main' }}>
+                                Outcome: {f.outcome}
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell sx={{ color: 'text.secondary' }}>{f.agent_name || '—'}</TableCell>
+                          <TableCell>
+                            <StatusChip status={late ? 'overdue' : f.status} />
+                          </TableCell>
+                          <TableCell align="right">
+                            {f.status === 'pending' && (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                onClick={() => {
+                                  setCompleting(f)
+                                  setOutcome('')
+                                }}
+                              >
+                                Mark done
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </>
+        )}
+
+        {/* ------------------------------------------------------ birthdays */}
+        {tab === 2 && (
+          <>
+            {loading && <Loading label="Loading birthdays" />}
+            {!loading && birthdays.length === 0 && (
+              <EmptyState
+                title="No birthdays coming up"
+                description="Birthdays in the next 30 days appear here, with whoever to call."
+                compact
+              />
+            )}
+            {!loading && birthdays.length > 0 && (
+              <Box>
+                <Box sx={{ px: { xs: `${SPACE.lg}px`, sm: `${SPACE.xl}px` }, pt: `${SPACE.lg}px` }}>
+                  <Typography variant="body2" color="text.secondary">
+                    The next 30 days. A short message on the day goes a long way.
+                  </Typography>
+                </Box>
+                {birthdays.map((b) => (
+                  <Box
+                    key={b.id}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: `${SPACE.lg}px`,
+                      px: { xs: `${SPACE.lg}px`, sm: `${SPACE.xl}px` },
+                      py: `${SPACE.lg}px`,
+                      borderBottom: `1px solid ${palette.border}`,
+                      '&:last-of-type': { borderBottom: 'none' },
+                    }}
+                  >
+                    <Avatarish name={b.name} />
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: `${SPACE.md}px`, flexWrap: 'wrap' }}>
+                        <Typography sx={{ fontWeight: 550 }}>{b.name}</Typography>
+                        {b.is_investor && <StatusChip status="__investor" label="Investor" />}
+                      </Box>
+                      {b.phone && (
+                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                          {b.phone}
+                        </Typography>
+                      )}
+                    </Box>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: `${SPACE.sm}px`,
+                        color: b.days_until === 0 ? 'success.main' : 'text.secondary',
+                        fontWeight: b.days_until === 0 ? 600 : 400,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {b.days_until === 0 && <CakeOutlined sx={{ fontSize: 16 }} />}
+                      {b.days_until === 0 ? 'Today' : b.days_until === 1 ? 'Tomorrow' : `in ${b.days_until} days`}
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </>
+        )}
+      </Section>
+
+      {/* ------------------------------------------------------- dialogs */}
       <Dialog open={leadDialog} onClose={() => setLeadDialog(false)} fullWidth maxWidth="sm">
         <DialogTitle>Add lead</DialogTitle>
         <DialogContent>
-          <Grid container spacing={2} sx={{ mt: 0 }}>
-            <Grid item xs={12}><TextField label="Name" required fullWidth value={leadForm.name} onChange={(e) => setLeadForm((p) => ({ ...p, name: e.target.value }))} /></Grid>
-            <Grid item xs={6}><TextField label="Phone" fullWidth value={leadForm.phone} onChange={(e) => setLeadForm((p) => ({ ...p, phone: e.target.value }))} /></Grid>
-            <Grid item xs={6}><TextField label="Email" fullWidth value={leadForm.email} onChange={(e) => setLeadForm((p) => ({ ...p, email: e.target.value }))} /></Grid>
-            <Grid item xs={6}><TextField label="Birthday" type="date" InputLabelProps={{ shrink: true }} fullWidth value={leadForm.bday} onChange={(e) => setLeadForm((p) => ({ ...p, bday: e.target.value }))} /></Grid>
-            <Grid item xs={6}><TextField label="Monthly income (PKR)" type="number" fullWidth value={leadForm.income} onChange={(e) => setLeadForm((p) => ({ ...p, income: e.target.value }))} /></Grid>
-            <Grid item xs={12}><FormControlLabel control={<Checkbox checked={leadForm.is_investor} onChange={(e) => setLeadForm((p) => ({ ...p, is_investor: e.target.checked }))} />} label="Investor" /></Grid>
-            <Grid item xs={12}><TextField label="Notes" multiline rows={2} fullWidth value={leadForm.notes} onChange={(e) => setLeadForm((p) => ({ ...p, notes: e.target.value }))} /></Grid>
-          </Grid>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: `${SPACE.lg}px` }}>
+            <Box sx={{ gridColumn: '1 / -1' }}>
+              <TextField
+                label="Name"
+                required
+                fullWidth
+                autoFocus
+                value={leadForm.name}
+                onChange={(e) => setLeadForm((p) => ({ ...p, name: e.target.value }))}
+              />
+            </Box>
+            <TextField
+              label="Phone"
+              fullWidth
+              value={leadForm.phone}
+              onChange={(e) => setLeadForm((p) => ({ ...p, phone: e.target.value }))}
+            />
+            <TextField
+              label="Email"
+              fullWidth
+              value={leadForm.email}
+              onChange={(e) => setLeadForm((p) => ({ ...p, email: e.target.value }))}
+            />
+            <TextField
+              label="Birthday"
+              type="date"
+              InputLabelProps={{ shrink: true }}
+              fullWidth
+              value={leadForm.bday}
+              onChange={(e) => setLeadForm((p) => ({ ...p, bday: e.target.value }))}
+            />
+            <TextField
+              label="Monthly income (PKR)"
+              type="number"
+              fullWidth
+              value={leadForm.income}
+              onChange={(e) => setLeadForm((p) => ({ ...p, income: e.target.value }))}
+            />
+            <Box sx={{ gridColumn: '1 / -1' }}>
+              <TextField
+                label="Notes"
+                multiline
+                rows={2}
+                fullWidth
+                value={leadForm.notes}
+                onChange={(e) => setLeadForm((p) => ({ ...p, notes: e.target.value }))}
+              />
+            </Box>
+            <Box sx={{ gridColumn: '1 / -1' }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={leadForm.is_investor}
+                    onChange={(e) => setLeadForm((p) => ({ ...p, is_investor: e.target.checked }))}
+                  />
+                }
+                label={<Typography variant="body2">Buying as an investment</Typography>}
+              />
+            </Box>
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setLeadDialog(false)}>Cancel</Button>
-          <Button variant="contained" onClick={saveLead} disabled={!leadForm.name.trim()}>Save</Button>
+          <Button variant="contained" onClick={saveLead} disabled={saving || !leadForm.name.trim()}>
+            Save lead
+          </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Add follow-up */}
       <Dialog open={Boolean(fuDialog)} onClose={() => setFuDialog(null)} fullWidth maxWidth="xs">
-        <DialogTitle>Follow-up with {fuDialog?.name}</DialogTitle>
+        <DialogTitle>Follow up with {fuDialog?.name}</DialogTitle>
         <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-            <TextField label="When" type="datetime-local" InputLabelProps={{ shrink: true }} value={fuForm.due_at} onChange={(e) => setFuForm((p) => ({ ...p, due_at: e.target.value }))} />
-            <TextField select label="How" value={fuForm.channel} onChange={(e) => setFuForm((p) => ({ ...p, channel: e.target.value }))}>
-              {CHANNELS.map((c) => (<MenuItem key={c} value={c}>{c}</MenuItem>))}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: `${SPACE.lg}px` }}>
+            <TextField
+              label="When"
+              type="datetime-local"
+              InputLabelProps={{ shrink: true }}
+              value={fuForm.due_at}
+              onChange={(e) => setFuForm((p) => ({ ...p, due_at: e.target.value }))}
+            />
+            <TextField
+              select
+              label="How"
+              value={fuForm.channel}
+              onChange={(e) => setFuForm((p) => ({ ...p, channel: e.target.value }))}
+            >
+              {CHANNELS.map((c) => (
+                <MenuItem key={c} value={c} sx={{ textTransform: 'capitalize' }}>
+                  {c}
+                </MenuItem>
+              ))}
             </TextField>
-            <TextField label="Note" multiline rows={2} value={fuForm.note} onChange={(e) => setFuForm((p) => ({ ...p, note: e.target.value }))} />
+            <TextField
+              label="What is it about?"
+              multiline
+              rows={2}
+              value={fuForm.note}
+              onChange={(e) => setFuForm((p) => ({ ...p, note: e.target.value }))}
+            />
           </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setFuDialog(null)}>Cancel</Button>
-          <Button variant="contained" onClick={saveFollowUp} disabled={!fuForm.due_at}>Schedule</Button>
+          <Button variant="contained" onClick={saveFollowUp} disabled={saving || !fuForm.due_at}>
+            Schedule
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(completing)} onClose={() => setCompleting(null)} fullWidth maxWidth="xs">
+        <DialogTitle>How did it go?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: `${SPACE.lg}px` }}>
+            {completing?.lead_name} · {completing?.channel || 'follow-up'}
+          </Typography>
+          <TextField
+            label="Outcome (optional)"
+            multiline
+            rows={3}
+            fullWidth
+            autoFocus
+            placeholder="Wants to view on Saturday"
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCompleting(null)}>Cancel</Button>
+          <Button variant="contained" onClick={completeFollowUp} disabled={saving}>
+            Mark done
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

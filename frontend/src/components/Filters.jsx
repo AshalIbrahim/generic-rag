@@ -1,148 +1,144 @@
+/**
+ * The filter bar above the listings table.
+ *
+ * Was a raised panel with a purple-tinted gradient and teal text on it. It is
+ * now a plain toolbar that belongs to the results panel below it, so filtering
+ * and results read as one thing rather than two competing boxes.
+ */
 import React, { useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
-import TextField from '@mui/material/TextField'
-import MenuItem from '@mui/material/MenuItem'
 import Button from '@mui/material/Button'
-import Paper from '@mui/material/Paper'
+import Chip from '@mui/material/Chip'
+import MenuItem from '@mui/material/MenuItem'
+import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+import { API } from '../auth'
+import { SPACE, palette } from '../theme'
 
-const purposes = [
-  { value: '', label: 'Sale & Rent' },
-  { value: 'sale', label: 'For Sale' },
-  { value: 'rent', label: 'For Rent' },
+const PURPOSES = [
+  { value: '', label: 'Sale & rent' },
+  { value: 'sale', label: 'For sale' },
+  { value: 'rent', label: 'For rent' },
 ]
 
-export default function Filters({ filters, setFilters, onApply, locations = [] }) {
-  const [propertyTypes, setPropertyTypes] = useState([])
-  const [loading, setLoading] = useState(true)
+export const EMPTY_FILTERS = { type: '', location: '', purpose: '', minPrice: '', maxPrice: '' }
+
+export default function Filters({ filters, setFilters, onApply, locations = [], resultLabel }) {
+  const [propertyTypes, setPropertyTypes] = useState([{ value: '', label: 'Any type' }])
 
   useEffect(() => {
+    let cancelled = false
     async function fetchPropertyTypes() {
       try {
         const resp = await fetch(`${API}/prop_type`)
         const data = await resp.json()
-        const types = data.prop_type || []
+        if (cancelled) return
         setPropertyTypes([
           { value: '', label: 'Any type' },
-          ...types.map(t => ({ value: t, label: t }))
+          ...(data.prop_type || []).map((t) => ({ value: t, label: t })),
         ])
       } catch (err) {
         console.error('Failed to fetch property types:', err)
-        // Fallback to empty array
-        setPropertyTypes([{ value: '', label: 'Any type' }])
-      } finally {
-        setLoading(false)
       }
     }
     fetchPropertyTypes()
+    return () => {
+      cancelled = true
+    }
   }, [])
-  return (
-    <Paper 
-      elevation={3} 
-      sx={{ 
-        mb: 3, 
-        p: 2.5, 
-        borderRadius: 3,
-        background: 'linear-gradient(135deg, rgba(123,31,162,0.06), rgba(156,39,176,0.03), #ffffff)',
-        border: '1px solid rgba(123,31,162,0.1)',
-      }}
-    >
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 600, color: '#0f766e' }}>
-          Refine results
-        </Typography>
-        <Button
-          size="small"
-          onClick={() => setFilters({ type: '', location: '', purpose: '', minPrice: '', maxPrice: '' })}
-          sx={{
-            color: '#14b8a6',
-            '&:hover': {
-              background: 'rgba(123,31,162,0.1)',
-            },
-          }}
-        >
-          Clear all
-        </Button>
-      </Box>
 
-      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+  const activeCount = Object.values(filters).filter((v) => v !== '' && v !== null && v !== undefined).length
+  const set = (key) => (e) => setFilters((f) => ({ ...f, [key]: e.target.value }))
+  const applyOnEnter = (e) => {
+    if (e.key === 'Enter') onApply()
+  }
+
+  return (
+    <Box sx={{ borderBottom: `1px solid ${palette.border}` }}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: `${SPACE.md}px`,
+          px: { xs: `${SPACE.lg}px`, sm: `${SPACE.xl}px` },
+          py: `${SPACE.lg}px`,
+          // On a phone the fields share the row evenly instead of wrapping into
+          // a ragged edge; from sm up they take their natural widths.
+          '& > .MuiFormControl-root': { flex: { xs: '1 1 136px', sm: '0 0 auto' } },
+        }}
+      >
         <TextField
           select
           label="Type"
-          size="small"
           value={filters.type || ''}
-          onChange={e => setFilters(f => ({ ...f, type: e.target.value }))}
-          sx={{ minWidth: 150 }}
-          disabled={loading}
-          helperText={loading ? 'Loading...' : ''}
+          onChange={set('type')}
+          sx={{ minWidth: 144 }}
         >
-          {propertyTypes.map(opt => (
-            <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-          ))}
-        </TextField>
-
-        <TextField
-          select={Boolean(locations && locations.length)}
-          label="Location"
-          size="small"
-          value={filters.location || ''}
-          onChange={e => setFilters(f => ({ ...f, location: e.target.value }))}
-          sx={{ minWidth: 180 }}
-        >
-          {(locations && locations.length ? locations : []).map(loc => (
-            <MenuItem key={loc} value={loc}>{loc}</MenuItem>
+          {propertyTypes.map((opt) => (
+            <MenuItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </MenuItem>
           ))}
         </TextField>
 
         <TextField
           select
-          label="Purpose"
-          size="small"
-          value={filters.purpose || ''}
-          onChange={e => setFilters(f => ({ ...f, purpose: e.target.value }))}
-          sx={{ minWidth: 150 }}
+          label="Location"
+          value={filters.location || ''}
+          onChange={set('location')}
+          sx={{ minWidth: 178 }}
         >
-          {purposes.map(opt => (
-            <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+          <MenuItem value="">Anywhere</MenuItem>
+          {locations.map((loc) => (
+            <MenuItem key={loc} value={loc}>
+              {loc}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        <TextField select label="Purpose" value={filters.purpose || ''} onChange={set('purpose')} sx={{ minWidth: 144 }}>
+          {PURPOSES.map((opt) => (
+            <MenuItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </MenuItem>
           ))}
         </TextField>
 
         <TextField
-          label="Min Price"
-          size="small"
+          label="Min price"
           type="number"
           value={filters.minPrice || ''}
-          onChange={e => setFilters(f => ({ ...f, minPrice: e.target.value }))}
-          sx={{ minWidth: 120 }}
+          onChange={set('minPrice')}
+          onKeyDown={applyOnEnter}
+          sx={{ width: 123 }}
         />
         <TextField
-          label="Max Price"
-          size="small"
+          label="Max price"
           type="number"
           value={filters.maxPrice || ''}
-          onChange={e => setFilters(f => ({ ...f, maxPrice: e.target.value }))}
-          sx={{ minWidth: 120 }}
+          onChange={set('maxPrice')}
+          onKeyDown={applyOnEnter}
+          sx={{ width: 123 }}
         />
 
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <Button 
-            variant="contained" 
-            onClick={onApply} 
-            sx={{ 
-              minWidth: 120,
-              background: 'linear-gradient(90deg, #0f766e, #14b8a6)',
-              '&:hover': {
-                background: 'linear-gradient(90deg, #0b5d56, #0f766e)',
-              },
-            }}
-          >
-            Apply filters
+        <Button variant="contained" onClick={onApply}>
+          Apply
+        </Button>
+
+        {activeCount > 0 && (
+          <Button variant="text" onClick={() => { setFilters(EMPTY_FILTERS); }} sx={{ color: 'text.secondary' }}>
+            Clear {activeCount > 1 ? `(${activeCount})` : ''}
           </Button>
-        </Box>
+        )}
+
+        {resultLabel && (
+          <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto', pl: `${SPACE.md}px` }}>
+            {resultLabel}
+          </Typography>
+        )}
       </Box>
-    </Paper>
+    </Box>
   )
 }
-

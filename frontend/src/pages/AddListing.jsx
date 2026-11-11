@@ -1,53 +1,64 @@
-import React, { useState, useEffect } from 'react'
-import {
-  Container,
-  Paper,
-  TextField,
-  Button,
-  Typography,
-  Box,
-  MenuItem,
-  Alert,
-  CircularProgress,
-  Fade,
-  Slide,
-  ToggleButtonGroup,
-  ToggleButton,
-  List,
-  ListItem,
-  ListItemText,
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableCell,
-  TableContainer,
-} from '@mui/material'
+/**
+ * Add a listing, one at a time or from a spreadsheet.
+ *
+ * Changes beyond styling:
+ * - Location and property type are combo boxes you can type into. They were
+ *   dropdowns limited to values already in the database, so there was no way
+ *   to list a property in a new area -- even though the server creates the
+ *   location when it sees an unfamiliar name (get_or_create_location).
+ * - "Covered Area (sqft)" lost its unit. The column stores a bare number with
+ *   no unit recorded, so labelling it sqft was a guess shown to the user.
+ * - The CSV example is a Pakistani address and a PKR price, not "Austin, Texas".
+ * - Success no longer bounces you to the listings page after two seconds; you
+ *   choose whether to add another or go and look at it.
+ */
+import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import Alert from '@mui/material/Alert'
+import Autocomplete from '@mui/material/Autocomplete'
+import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
+import MenuItem from '@mui/material/MenuItem'
+import Table from '@mui/material/Table'
+import TableBody from '@mui/material/TableBody'
+import TableCell from '@mui/material/TableCell'
+import TableContainer from '@mui/material/TableContainer'
+import TableHead from '@mui/material/TableHead'
+import TableRow from '@mui/material/TableRow'
+import Tab from '@mui/material/Tab'
+import Tabs from '@mui/material/Tabs'
+import TextField from '@mui/material/TextField'
+import Typography from '@mui/material/Typography'
 import axios from 'axios'
-import { authHeaders } from '../auth' // ADDED: JWT for add / upload calls
 
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+import { API, authHeaders } from '../auth'
+import { SPACE, palette } from '../theme'
+import { PageHeader, Section } from '../ui'
+
+const emptyForm = {
+  prop_type: '',
+  purpose: 'sale',
+  covered_area: '',
+  price: '',
+  location: '',
+  beds: '',
+  baths: '',
+  amenities: '',
+}
+
+const CSV_COLUMNS = ['prop_type', 'purpose', 'covered_area', 'price', 'location', 'beds', 'baths', 'amenities']
+const CSV_EXAMPLE = ['House', 'For Sale', '2200', '45000000', 'DHA Phase 5, Lahore', '4', '3', 'Garage, Backup generator']
 
 export default function AddListing() {
   const navigate = useNavigate()
-  const [formData, setFormData] = useState({
-    prop_type: '',
-    purpose: 'sale',
-    covered_area: '',
-    price: '',
-    location: '',
-    beds: '',
-    baths: '',
-    amenities: '',
-  })
+  const [formData, setFormData] = useState(emptyForm)
   const [locations, setLocations] = useState([])
   const [propertyTypes, setPropertyTypes] = useState([])
   const [loading, setLoading] = useState(false)
-  const [success, setSuccess] = useState(false)
+  const [createdId, setCreatedId] = useState(null)
   const [error, setError] = useState('')
 
-  const [mode, setMode] = useState('single') // 'single' or 'bulk'
+  const [mode, setMode] = useState(0) // 0 = single, 1 = bulk
   const [bulkFile, setBulkFile] = useState(null)
   const [bulkUploading, setBulkUploading] = useState(false)
   const [bulkResult, setBulkResult] = useState(null)
@@ -56,52 +67,48 @@ export default function AddListing() {
   const [singleImages, setSingleImages] = useState([])
 
   useEffect(() => {
+    async function fetchOptions() {
+      try {
+        const [locResp, typeResp] = await Promise.all([
+          axios.get(`${API}/locations`),
+          axios.get(`${API}/prop_type`),
+        ])
+        setLocations(locResp.data.locations || [])
+        setPropertyTypes(typeResp.data.prop_type || [])
+      } catch (err) {
+        console.error('Error fetching options:', err)
+      }
+    }
     fetchOptions()
   }, [])
 
-  async function fetchOptions() {
-    try {
-      const [locResp, typeResp] = await Promise.all([
-        axios.get(`${API}/locations`),
-        axios.get(`${API}/prop_type`),
-      ])
-      setLocations(locResp.data.locations || [])
-      setPropertyTypes(typeResp.data.prop_type || [])
-    } catch (err) {
-      console.error('Error fetching options:', err)
-    }
-  }
-
   const handleChange = (e) => {
     const { name, value } = e.target
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }))
+    setFormData((prev) => ({ ...prev, [name]: value }))
     setError('')
   }
 
-  const handleSingleImagesChange = (e) => {
-    setSingleImages(Array.from(e.target.files || []))
-  }
-
-  const handleSubmit = async (e) => {
+  async function handleSubmit(e) {
     e.preventDefault()
     setLoading(true)
     setError('')
-    setSuccess(false)
+    setCreatedId(null)
 
     try {
-      const response = await axios.post(`${API}/listings/add`, {
-        prop_type: formData.prop_type,
-        purpose: formData.purpose,
-        covered_area: parseFloat(formData.covered_area),
-        price: parseFloat(formData.price),
-        location: formData.location,
-        beds: parseInt(formData.beds, 10),
-        baths: parseInt(formData.baths, 10),
-        amenities: formData.amenities || '',
-      }, { headers: authHeaders() }) // CHANGED: sends the login token
+      const response = await axios.post(
+        `${API}/listings/add`,
+        {
+          prop_type: formData.prop_type,
+          purpose: formData.purpose,
+          covered_area: parseFloat(formData.covered_area),
+          price: parseFloat(formData.price),
+          location: formData.location,
+          beds: parseInt(formData.beds, 10),
+          baths: parseInt(formData.baths, 10),
+          amenities: formData.amenities || '',
+        },
+        { headers: authHeaders() }
+      )
 
       if (response.data.success) {
         const newId = response.data.id
@@ -110,40 +117,26 @@ export default function AddListing() {
           singleImages.forEach((img) => imagePayload.append('files', img))
           try {
             await axios.post(`${API}/listings/${newId}/images`, imagePayload, {
-              headers: authHeaders({ 'Content-Type': 'multipart/form-data' }), // CHANGED
+              headers: authHeaders({ 'Content-Type': 'multipart/form-data' }),
             })
           } catch (imgErr) {
-            // Listing was created successfully even if image upload failed —
-            // surface it, but don't block the success flow below.
             console.error('Image upload failed:', imgErr)
-            setError('Listing added, but image upload failed. You can add images from the listing details page.')
+            setError('The listing was saved, but the photos did not upload. You can add them from the listing page.')
           }
         }
-        setSuccess(true)
-        setTimeout(() => {
-          navigate('/')
-        }, 2000)
+        setCreatedId(newId)
+        setFormData(emptyForm)
+        setSingleImages([])
       }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to add listing. Please try again.')
+      setError(err.response?.data?.detail || 'Could not add the listing. Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
-  const handleModeChange = (e, newMode) => {
-    if (newMode === null) return
-    setMode(newMode)
-    setError('')
-    setSuccess(false)
-    setBulkError('')
-    setBulkResult(null)
-  }
-
-  const handleDownloadTemplate = () => {
-    const header = 'prop_type,purpose,covered_area,price,location,beds,baths,amenities'
-    const example = 'House,For Sale,2200,450000,"Austin, Texas",4,3,"Garage,Backyard,Central AC"'
-    const csvContent = `${header}\n${example}\n`
+  function handleDownloadTemplate() {
+    const csvContent = `${CSV_COLUMNS.join(',')}\n${CSV_EXAMPLE.map((v) => (v.includes(',') ? `"${v}"` : v)).join(',')}\n`
     const blob = new Blob([csvContent], { type: 'text/csv' })
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -153,17 +146,10 @@ export default function AddListing() {
     window.URL.revokeObjectURL(url)
   }
 
-  const handleBulkFileChange = (e) => {
-    const selected = e.target.files?.[0] || null
-    setBulkFile(selected)
-    setBulkResult(null)
-    setBulkError('')
-  }
-
-  const handleBulkUpload = async (e) => {
+  async function handleBulkUpload(e) {
     e.preventDefault()
     if (!bulkFile) {
-      setBulkError('Please choose a .csv or .xlsx file first.')
+      setBulkError('Choose a .csv or .xlsx file first.')
       return
     }
     setBulkUploading(true)
@@ -175,400 +161,273 @@ export default function AddListing() {
 
     try {
       const response = await axios.post(`${API}/listings/bulk-upload`, payload, {
-        headers: authHeaders({ 'Content-Type': 'multipart/form-data' }), // CHANGED
+        headers: authHeaders({ 'Content-Type': 'multipart/form-data' }),
       })
       setBulkResult(response.data)
     } catch (err) {
-      setBulkError(err.response?.data?.detail || 'Failed to upload file. Please try again.')
+      setBulkError(err.response?.data?.detail || 'Could not upload the file. Please try again.')
     } finally {
       setBulkUploading(false)
     }
   }
 
   return (
-    <Container maxWidth="md" sx={{ mt: 4, mb: 6 }}>
-      <Fade in timeout={600}>
-        <Paper
-          elevation={8}
-          sx={{
-            p: 4,
-            borderRadius: 4,
-            background: 'linear-gradient(135deg, rgba(255,255,255,0.95), rgba(250,250,255,0.95))',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
-          }}
-        >
-          <Slide direction="down" in timeout={500}>
-            <Typography
-              variant="h4"
-              sx={{
-                mb: 3,
-                fontWeight: 700,
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                textAlign: 'center',
-              }}
-            >
-              Add New Listing
-            </Typography>
-          </Slide>
+    <Box>
+      <PageHeader
+        title="Add a listing"
+        description="Add one property, or bring a whole spreadsheet in at once."
+      />
 
-          <Box sx={{ display: 'flex', justifyContent: 'center', mb: 3 }}>
-            <ToggleButtonGroup
+      <Box sx={{ maxWidth: 987 /* Fibonacci */ }}>
+        <Section>
+          <Box sx={{ px: { xs: `${SPACE.lg}px`, sm: `${SPACE.xl}px` } }}>
+            <Tabs
               value={mode}
-              exclusive
-              onChange={handleModeChange}
-              size="small"
-              sx={{
-                '& .MuiToggleButton-root.Mui-selected': {
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  color: '#fff',
-                  '&:hover': {
-                    background: 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)',
-                  },
-                },
+              onChange={(_, v) => {
+                setMode(v)
+                setError('')
+                setCreatedId(null)
+                setBulkError('')
+                setBulkResult(null)
               }}
             >
-              <ToggleButton value="single">Single Listing</ToggleButton>
-              <ToggleButton value="bulk">Bulk Upload</ToggleButton>
-            </ToggleButtonGroup>
+              <Tab label="One property" />
+              <Tab label="From a spreadsheet" />
+            </Tabs>
           </Box>
 
-          {success && (
-            <Fade in timeout={400}>
-              <Alert severity="success" sx={{ mb: 3 }}>
-                Listing added successfully! Redirecting to listings...
-              </Alert>
-            </Fade>
-          )}
+          {/* ------------------------------------------------ single ----- */}
+          {mode === 0 && (
+            <Box component="form" onSubmit={handleSubmit} sx={{ p: `${SPACE.xl}px` }}>
+              {createdId && (
+                <Alert
+                  severity="success"
+                  sx={{ mb: `${SPACE.xl}px` }}
+                  action={
+                    <Button size="small" onClick={() => navigate(`/property/${createdId}`)}>
+                      View it
+                    </Button>
+                  }
+                >
+                  Listing #{createdId} added. The form is clear for the next one.
+                </Alert>
+              )}
+              {error && (
+                <Alert severity="error" sx={{ mb: `${SPACE.xl}px` }} onClose={() => setError('')}>
+                  {error}
+                </Alert>
+              )}
 
-          {error && (
-            <Fade in timeout={400}>
-              <Alert severity="error" sx={{ mb: 3 }}>
-                {error}
-              </Alert>
-            </Fade>
-          )}
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: `${SPACE.lg}px` }}>
+                <Autocomplete
+                  freeSolo
+                  options={propertyTypes}
+                  value={formData.prop_type}
+                  onInputChange={(_, v) => setFormData((p) => ({ ...p, prop_type: v || '' }))}
+                  renderInput={(params) => (
+                    <TextField {...params} label="Property type" required helperText="Pick one, or type a new one" />
+                  )}
+                />
 
-          {mode === 'single' && (
-          <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
-              <TextField
-                select
-                label="Property Type"
-                name="prop_type"
-                value={formData.prop_type}
-                onChange={handleChange}
-                required
-                fullWidth
-                SelectProps={{
-                  MenuProps: {
-                    PaperProps: {
-                      sx: {
-                        maxHeight: 300,
-                      },
-                    },
-                  },
-                }}
-              >
-                {propertyTypes.map((type) => (
-                  <MenuItem key={type} value={type}>
-                    {type}
-                  </MenuItem>
-                ))}
-              </TextField>
+                <TextField select label="Purpose" name="purpose" value={formData.purpose} onChange={handleChange} required fullWidth>
+                  <MenuItem value="sale">For sale</MenuItem>
+                  <MenuItem value="rent">For rent</MenuItem>
+                </TextField>
 
-              <TextField
-                select
-                label="Purpose"
-                name="purpose"
-                value={formData.purpose}
-                onChange={handleChange}
-                required
-                fullWidth
-              >
-                <MenuItem value="sale">For Sale</MenuItem>
-                <MenuItem value="rent">For Rent</MenuItem>
-              </TextField>
+                <Autocomplete
+                  freeSolo
+                  options={locations}
+                  value={formData.location}
+                  onInputChange={(_, v) => setFormData((p) => ({ ...p, location: v || '' }))}
+                  renderInput={(params) => (
+                    <TextField {...params} label="Location" required helperText="A new area is created if it is not in the list" />
+                  )}
+                />
 
-              <TextField
-                label="Location"
-                name="location"
-                select
-                value={formData.location}
-                onChange={handleChange}
-                required
-                fullWidth
-                SelectProps={{
-                  MenuProps: {
-                    PaperProps: {
-                      sx: {
-                        maxHeight: 300,
-                      },
-                    },
-                  },
-                }}
-              >
-                {locations.map((loc) => (
-                  <MenuItem key={loc} value={loc}>
-                    {loc}
-                  </MenuItem>
-                ))}
-              </TextField>
+                <TextField
+                  label="Price (PKR)"
+                  name="price"
+                  type="number"
+                  value={formData.price}
+                  onChange={handleChange}
+                  required
+                  fullWidth
+                  inputProps={{ min: 0, step: 1000 }}
+                  helperText={formData.purpose === 'rent' ? 'Rent per month' : 'Asking price'}
+                />
 
-              <TextField
-                label="Price (PKR)"
-                name="price"
-                type="number"
-                value={formData.price}
-                onChange={handleChange}
-                required
-                fullWidth
-                inputProps={{ min: 0, step: 1000 }}
-              />
+                <TextField
+                  label="Covered area"
+                  name="covered_area"
+                  type="number"
+                  value={formData.covered_area}
+                  onChange={handleChange}
+                  required
+                  fullWidth
+                  inputProps={{ min: 0, step: 1 }}
+                  helperText="Whatever unit your agency uses — keep it the same across listings"
+                />
 
-              <TextField
-                label="Covered Area (sqft)"
-                name="covered_area"
-                type="number"
-                value={formData.covered_area}
-                onChange={handleChange}
-                required
-                fullWidth
-                inputProps={{ min: 0, step: 1 }}
-              />
+                <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: `${SPACE.lg}px` }}>
+                  <TextField
+                    label="Bedrooms"
+                    name="beds"
+                    type="number"
+                    value={formData.beds}
+                    onChange={handleChange}
+                    required
+                    fullWidth
+                    inputProps={{ min: 0, max: 20 }}
+                  />
+                  <TextField
+                    label="Bathrooms"
+                    name="baths"
+                    type="number"
+                    value={formData.baths}
+                    onChange={handleChange}
+                    required
+                    fullWidth
+                    inputProps={{ min: 0, max: 20 }}
+                  />
+                </Box>
 
-              <TextField
-                label="Bedrooms"
-                name="beds"
-                type="number"
-                value={formData.beds}
-                onChange={handleChange}
-                required
-                fullWidth
-                inputProps={{ min: 0, max: 20 }}
-              />
+                <Box sx={{ gridColumn: { md: '1 / -1' } }}>
+                  <TextField
+                    label="Amenities"
+                    name="amenities"
+                    value={formData.amenities}
+                    onChange={handleChange}
+                    fullWidth
+                    multiline
+                    rows={2}
+                    placeholder="Swimming pool, backup generator, covered parking"
+                    helperText="Separate with commas. These show on the listing page and help the assistant answer questions."
+                  />
+                </Box>
+              </Box>
 
-              <TextField
-                label="Bathrooms"
-                name="baths"
-                type="number"
-                value={formData.baths}
-                onChange={handleChange}
-                required
-                fullWidth
-                inputProps={{ min: 0, max: 20 }}
-              />
-            </Box>
-
-            <TextField
-              label="Amenities (optional)"
-              name="amenities"
-              value={formData.amenities}
-              onChange={handleChange}
-              fullWidth
-              multiline
-              rows={3}
-              placeholder="e.g., Swimming pool, Gym, Parking, Security..."
-            />
-
-            <Button
-              variant="outlined"
-              component="label"
-              sx={{
-                borderColor: '#667eea',
-                color: '#667eea',
-                alignSelf: 'flex-start',
-                '&:hover': {
-                  borderColor: '#764ba2',
-                  background: 'rgba(102, 126, 234, 0.08)',
-                },
-              }}
-            >
-              {singleImages.length > 0 ? `${singleImages.length} image(s) selected` : 'Add Images (optional)'}
-              <input
-                type="file"
-                hidden
-                multiple
-                accept="image/*"
-                onChange={handleSingleImagesChange}
-              />
-            </Button>
-
-            <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end', mt: 2 }}>
-              <Button
-                variant="outlined"
-                onClick={() => navigate('/')}
+              <Box
                 sx={{
-                  borderColor: '#667eea',
-                  color: '#667eea',
-                  '&:hover': {
-                    borderColor: '#764ba2',
-                    background: 'rgba(102, 126, 234, 0.08)',
-                  },
+                  mt: `${SPACE.xl}px`,
+                  p: `${SPACE.lg}px`,
+                  border: `1px dashed ${palette.borderStrong}`,
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: `${SPACE.lg}px`,
+                  flexWrap: 'wrap',
                 }}
               >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="contained"
-                disabled={loading}
-                sx={{
-                  minWidth: 120,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
-                  '&:hover': {
-                    background: 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)',
-                    boxShadow: '0 6px 20px rgba(102, 126, 234, 0.5)',
-                    transform: 'translateY(-2px)',
-                  },
-                  '&:disabled': {
-                    background: '#ccc',
-                  },
-                  transition: 'all 0.3s ease',
-                }}
-              >
-                {loading ? <CircularProgress size={24} color="inherit" /> : 'Add Listing'}
-              </Button>
+                <Button variant="outlined" size="small" component="label">
+                  {singleImages.length > 0 ? `${singleImages.length} selected` : 'Choose photos'}
+                  <input type="file" hidden multiple accept="image/*" onChange={(e) => setSingleImages(Array.from(e.target.files || []))} />
+                </Button>
+                <Typography variant="body2" color="text.secondary">
+                  Optional. You can add them later from the listing page.
+                </Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', gap: `${SPACE.md}px`, justifyContent: 'flex-end', mt: `${SPACE.xl}px` }}>
+                <Button variant="outlined" onClick={() => navigate('/')}>
+                  Cancel
+                </Button>
+                <Button type="submit" variant="contained" disabled={loading}>
+                  {loading ? 'Adding…' : 'Add listing'}
+                </Button>
+              </Box>
             </Box>
-          </Box>
           )}
 
-          {mode === 'bulk' && (
-          <Box component="form" onSubmit={handleBulkUpload} sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-              Your file needs a header row with these exact column names. Columns are matched
-              case-insensitively; amenities is optional, everything else is required.
-            </Typography>
+          {/* -------------------------------------------------- bulk ----- */}
+          {mode === 1 && (
+            <Box component="form" onSubmit={handleBulkUpload} sx={{ p: `${SPACE.xl}px` }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: `${SPACE.lg}px`, maxWidth: '72ch' }}>
+                Your file needs a header row with these column names. Capitalisation does not matter. Everything except
+                amenities is required.
+              </Typography>
 
-            <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
-              <Table size="small">
-                <TableHead>
-                  <TableRow sx={{ '& th': { fontWeight: 700, background: 'rgba(102, 126, 234, 0.08)' } }}>
-                    <TableCell>prop_type</TableCell>
-                    <TableCell>purpose</TableCell>
-                    <TableCell>covered_area</TableCell>
-                    <TableCell>price</TableCell>
-                    <TableCell>location</TableCell>
-                    <TableCell>beds</TableCell>
-                    <TableCell>baths</TableCell>
-                    <TableCell>amenities</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  <TableRow>
-                    <TableCell>House</TableCell>
-                    <TableCell>For Sale</TableCell>
-                    <TableCell>2200</TableCell>
-                    <TableCell>450000</TableCell>
-                    <TableCell>Austin, Texas</TableCell>
-                    <TableCell>4</TableCell>
-                    <TableCell>3</TableCell>
-                    <TableCell>Garage, Backyard</TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </TableContainer>
+              <TableContainer sx={{ border: `1px solid ${palette.border}`, borderRadius: '8px', mb: `${SPACE.lg}px` }}>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      {CSV_COLUMNS.map((c) => (
+                        <TableCell key={c} sx={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', textTransform: 'none' }}>
+                          {c}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    <TableRow>
+                      {CSV_EXAMPLE.map((v, i) => (
+                        <TableCell key={i} sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
+                          {v}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
 
-            <Button
-              variant="text"
-              onClick={handleDownloadTemplate}
-              sx={{ alignSelf: 'flex-start', color: '#667eea', textTransform: 'none', fontWeight: 600 }}
-            >
-              Download blank template (.csv)
-            </Button>
+              <Box sx={{ display: 'flex', gap: `${SPACE.lg}px`, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button variant="outlined" size="small" component="label">
+                  {bulkFile ? bulkFile.name : 'Choose file'}
+                  <input
+                    type="file"
+                    hidden
+                    accept=".csv,.xlsx,.xls"
+                    onChange={(e) => {
+                      setBulkFile(e.target.files?.[0] || null)
+                      setBulkResult(null)
+                      setBulkError('')
+                    }}
+                  />
+                </Button>
+                <Button variant="text" size="small" onClick={handleDownloadTemplate} sx={{ color: 'text.secondary' }}>
+                  Download a blank template
+                </Button>
+              </Box>
 
-            <Button
-              variant="outlined"
-              component="label"
-              sx={{
-                borderColor: '#667eea',
-                color: '#667eea',
-                alignSelf: 'flex-start',
-                '&:hover': {
-                  borderColor: '#764ba2',
-                  background: 'rgba(102, 126, 234, 0.08)',
-                },
-              }}
-            >
-              {bulkFile ? bulkFile.name : 'Choose File'}
-              <input
-                type="file"
-                hidden
-                accept=".csv,.xlsx,.xls"
-                onChange={handleBulkFileChange}
-              />
-            </Button>
+              {bulkError && (
+                <Alert severity="error" sx={{ mt: `${SPACE.lg}px` }}>
+                  {bulkError}
+                </Alert>
+              )}
 
-            {bulkError && (
-              <Fade in timeout={400}>
-                <Alert severity="error">{bulkError}</Alert>
-              </Fade>
-            )}
-
-            {bulkResult && (
-              <Fade in timeout={400}>
-                <Alert severity={bulkResult.rows_failed > 0 ? 'warning' : 'success'}>
+              {bulkResult && (
+                <Alert severity={bulkResult.rows_failed > 0 ? 'warning' : 'success'} sx={{ mt: `${SPACE.lg}px` }}>
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                     {bulkResult.rows_inserted} of {bulkResult.rows_received} rows added
                     {bulkResult.rows_failed > 0 ? `, ${bulkResult.rows_failed} failed` : ''}
-                    {bulkResult.rows_duplicates_skipped > 0 ? `, ${bulkResult.rows_duplicates_skipped} duplicate(s) skipped` : ''}.
+                    {bulkResult.rows_duplicates_skipped > 0
+                      ? `, ${bulkResult.rows_duplicates_skipped} duplicate${bulkResult.rows_duplicates_skipped === 1 ? '' : 's'} skipped`
+                      : ''}
+                    .
                   </Typography>
                   {bulkResult.errors && bulkResult.errors.length > 0 && (
-                    <List dense sx={{ maxHeight: 200, overflowY: 'auto', mt: 1 }}>
+                    <Box component="ul" sx={{ m: 0, mt: `${SPACE.md}px`, pl: `${SPACE.xl}px`, maxHeight: 233, overflowY: 'auto' }}>
                       {bulkResult.errors.map((err, idx) => (
-                        <ListItem key={idx} sx={{ py: 0 }}>
-                          <ListItemText primaryTypographyProps={{ variant: 'caption' }} primary={err} />
-                        </ListItem>
+                        <Box component="li" key={idx} sx={{ fontSize: 12, mb: '2px' }}>
+                          {err}
+                        </Box>
                       ))}
-                    </List>
+                    </Box>
                   )}
                 </Alert>
-              </Fade>
-            )}
+              )}
 
-            <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end', mt: 2 }}>
-              <Button
-                variant="outlined"
-                onClick={() => navigate('/')}
-                sx={{
-                  borderColor: '#667eea',
-                  color: '#667eea',
-                  '&:hover': {
-                    borderColor: '#764ba2',
-                    background: 'rgba(102, 126, 234, 0.08)',
-                  },
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="contained"
-                disabled={bulkUploading || !bulkFile}
-                sx={{
-                  minWidth: 120,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
-                  '&:hover': {
-                    background: 'linear-gradient(135deg, #764ba2 0%, #667eea 100%)',
-                    boxShadow: '0 6px 20px rgba(102, 126, 234, 0.5)',
-                    transform: 'translateY(-2px)',
-                  },
-                  '&:disabled': {
-                    background: '#ccc',
-                  },
-                  transition: 'all 0.3s ease',
-                }}
-              >
-                {bulkUploading ? <CircularProgress size={24} color="inherit" /> : 'Upload File'}
-              </Button>
+              <Box sx={{ display: 'flex', gap: `${SPACE.md}px`, justifyContent: 'flex-end', mt: `${SPACE.xl}px` }}>
+                <Button variant="outlined" onClick={() => navigate('/')}>
+                  {bulkResult ? 'Done' : 'Cancel'}
+                </Button>
+                <Button type="submit" variant="contained" disabled={bulkUploading || !bulkFile}>
+                  {bulkUploading ? 'Uploading…' : 'Upload file'}
+                </Button>
+              </Box>
             </Box>
-          </Box>
           )}
-        </Paper>
-      </Fade>
-    </Container>
+        </Section>
+      </Box>
+    </Box>
   )
 }

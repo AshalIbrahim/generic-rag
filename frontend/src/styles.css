@@ -1,114 +1,129 @@
-:root{
-  --bg-soft: #f4fbfa;
-  --bg-accent: #e6f7f5;
-  --ink: #0f172a;
-  --teal: #0f766e;
-  --teal-2: #14b8a6;
-  --amber: #f59e0b;
-  --card-shadow: 0 10px 30px rgba(15, 118, 110, 0.12);
+/*
+ * Global base styles. Design tokens live in src/theme.js -- this file only
+ * holds what MUI cannot express: the font import, scrollbars, and the markup
+ * the assistant returns as an HTML string.
+ *
+ * The gradients, shimmer skeletons, pulsing buttons and hover-lift cards that
+ * used to be here are gone on purpose. They drew the eye away from the data,
+ * and on a screen people keep open all day, movement is noise.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650&display=swap');
+
+:root {
+  /* Mirrors src/theme.js. Keep the two in step. */
+  --canvas: #fbfaf9;
+  --surface: #ffffff;
+  --surface-sunken: #f6f5f4;
+  --border: #e7e5e4;
+  --ink: #1c1917;
+  --ink-secondary: #57534e;
+  --ink-muted: #a8a29e;
+  --accent: #0f766e;
+  --accent-hover: #115e59;
+
+  /* Fibonacci spacing, converging on the golden ratio. */
+  --space-sm: 5px;
+  --space-md: 8px;
+  --space-lg: 13px;
+  --space-xl: 21px;
 }
 
+* {
+  box-sizing: border-box;
+}
+
+html,
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100%;
+  background: var(--canvas);
   color: var(--ink);
-  background:
-    radial-gradient(circle at 8% 8%, rgba(20,184,166,.15), transparent 34%),
-    radial-gradient(circle at 90% 0%, rgba(245,158,11,.14), transparent 30%),
-    linear-gradient(180deg, var(--bg-accent), var(--bg-soft) 36%, #fff);
-  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.property-card{
-  transition: transform .28s ease, box-shadow .28s ease, border-color .28s ease;
-  border-radius: 16px;
-  overflow: hidden;
-  border: 1px solid rgba(15,118,110,.14);
-  box-shadow: var(--card-shadow);
-  animation: riseIn .48s cubic-bezier(.2,.9,.2,1) both;
+/* Slim scrollbars, so a dense table does not gain a heavy grey gutter. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #dcd9d6;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-muted);
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 
-.property-card:hover{
-  transform: translateY(-8px) scale(1.01);
-  box-shadow: 0 22px 46px rgba(15,118,110,.2);
-  border-color: rgba(20,184,166,.4);
+/* Respect a reduced-motion preference everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
-@keyframes riseIn{
-  from{ opacity: 0; transform: translateY(14px) scale(.99) }
-  to{ opacity: 1; transform: translateY(0) scale(1) }
+/*
+ * The assistant's reply arrives as a sanitised HTML string (see
+ * _chatdb_to_safe_html in backend/app2.py), so it is styled here rather than
+ * with component props.
+ */
+.chat-html {
+  font-size: 13.5px;
+  line-height: 1.6;
 }
-
-.chatbot-root{
-  position: fixed;
-  right: 20px;
-  bottom: 20px;
-  z-index: 1400;
+.chat-html > :first-child {
+  margin-top: 0;
 }
-
-.chatbot-fab{
-  width: 64px !important;
-  height: 64px !important;
-  box-shadow: 0 16px 36px rgba(20,184,166,.36) !important;
-  animation: softPulse 2.8s ease-in-out infinite;
-}
-
-@keyframes softPulse{
-  0%,100%{ transform: scale(1) }
-  50%{ transform: scale(1.04) }
-}
-
-.chat-link{
-  color: #0f766e;
-  text-decoration: none;
-  font-weight: 600;
-  border-bottom: 1px dashed rgba(15,118,110,.4);
-}
-
-.chat-link:hover{
-  color: #0b5d56;
-  border-bottom-color: #0b5d56;
-}
-
-.db-chat-html p{
-  margin: 0 0 0.55rem;
-}
-.db-chat-html p:last-child,
-.db-chat-html ul:last-child,
-.db-chat-html ol:last-child{
+.chat-html > :last-child {
   margin-bottom: 0;
 }
-.db-chat-html ul,
-.db-chat-html ol{
-  margin: 0.2rem 0 0.55rem;
-  padding-left: 1.2rem;
+.chat-html p {
+  margin: 0 0 var(--space-md);
 }
-.db-chat-html li{
-  margin: 0.15rem 0;
+.chat-html ul,
+.chat-html ol {
+  margin: 0 0 var(--space-md);
+  padding-left: var(--space-xl);
 }
-.db-chat-html a{
-  color: #0f766e;
-  font-weight: 700;
-  text-decoration: none;
-  border-bottom: 1px dashed rgba(15,118,110,.45);
+.chat-html li {
+  margin: 0 0 var(--space-sm);
 }
-.db-chat-html a:hover{
-  color: #0b5d56;
-  border-bottom-color: #0b5d56;
+.chat-html li > ul,
+.chat-html li > ol {
+  margin-top: var(--space-sm);
+}
+.chat-html strong {
+  font-weight: 600;
+}
+.chat-html a {
+  color: var(--accent);
+  font-weight: 550;
+  text-decoration: underline;
+  text-decoration-color: #99f6e4;
+  text-underline-offset: 2px;
+}
+.chat-html a:hover {
+  color: var(--accent-hover);
+  text-decoration-color: currentColor;
 }
 
-.skeleton-card {
-  background: linear-gradient(120deg, rgba(20,184,166,0.12), rgba(245,158,11,0.08), rgba(20,184,166,0.12));
-  background-size: 200% 200%;
-  height: 180px;
-  animation: shimmer 2.1s ease infinite;
-}
-
-@keyframes shimmer {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 100% 50%; }
-}
-
-@media (max-width: 600px){
-  .chatbot-fab{ width:56px !important; height:56px !important }
+/* Money and counts only line up in a column with tabular figures. */
+.tnum {
+  font-variant-numeric: tabular-nums;
 }
